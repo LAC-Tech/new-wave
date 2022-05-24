@@ -98,28 +98,40 @@ const WordBuffer = struct {
     }
 
     pub fn typeSig(self: @This()) TypeSigErr!TypeSig {
-        // dup: n -> n n
-        // mul: n n -> n
-        // -1: ->
-        // mul: n n -> n
+        std.debug.print("\nType check begins...\n", .{});
+        std.debug.print("\ncode...{d}\n", .{self.code.items});
+        std.debug.print("\nall type sigs...{s}\n", .{self.type_sigs.items});
+
         const tss = self.type_sigs.items;
 
         if (tss.len == 0) return TypeSigErr.Empty;
         
         var result = tss[0];
-        
+
+        //std.debug.print("\n first type sig {s}\n", .{result});
+
+        // curr = (0, 1), next = (0, 1)
+        // curr = (0, 2), next = (2, 1)
+
+
         var i: usize = 1;
         while (i < tss.len) : (i += 1) {
+            std.debug.print("\nResult before: {s}...\n", .{result});
+
             const curr = tss[i];
 
-            if (result.outputs != curr.inputs) {
+            if (result.outputs < curr.inputs) {
                 return TypeSigErr.ArityMismatch;
             }
 
             result = TypeSig {
-                .inputs = result.inputs,
-                .outputs = curr.outputs
+                .inputs = result.outputs - curr.inputs,
+                .outputs = result.outputs + curr.outputs
             };
+
+            std.debug.print("\nResult after: {s}...\n", .{result});
+         
+
         }    
 
         return result;
@@ -286,7 +298,7 @@ const BuiltIns = struct {
     };
 };
 
-const primitives = [_]std.meta.Tuple(&.{ []const u8, DictEntry }) {
+const std_library = [_]std.meta.Tuple(&.{ []const u8, DictEntry }) {
     .{"+",      BuiltIns.add},
     .{"-",      BuiltIns.sub},
     .{"*",      BuiltIns.mul},
@@ -298,7 +310,21 @@ const TypeSigErr = error { Empty, ArityMismatch };
 
 const TypeSig = struct {
     inputs: u8,
-    outputs: u8
+    outputs: u8,
+
+    pub fn format(
+        value: @This(),
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype
+    ) !void {
+
+        //(inputs -> outputs)
+
+
+        try writer.print("{d} -> {d}", .{value.inputs, value.outputs});
+
+    }
 };
 
 const Interpreter = struct {
@@ -312,8 +338,8 @@ const Interpreter = struct {
     pub fn init(allocator: std.mem.Allocator) !Interpreter {
         var dict = Dict.init(allocator);
 
-        for (primitives) |p| {
-            try dict.put(p[0], p[1]);
+        for (std_library) |sl| {
+            try dict.put(sl[0], sl[1]);
         }
 
         return Interpreter {
@@ -369,7 +395,11 @@ const Interpreter = struct {
             }
         }
 
+        const ts = try self.entry_word_buffer.typeSig();
+        std.debug.print("\n type of entry: {s}\n", .{ts});
+
         const entry_word = try self.entry_word_buffer.toEntryWord();
+
         try self.vm.exec(&entry_word);
         try self.vm.print(&self.output_buffer);
         return self.output_buffer.items;
@@ -396,103 +426,121 @@ test "bug" {
     try std.testing.expectEqual(foo[0][1], 1);
 }
 
-test "infer type of constant" {
-    var wb = try WordBuffer.init(std.testing.allocator);
-    defer wb.deinit();
+// test "detects stack underflow" {
+//     try test_eval("ArityMismatch", "1 +");
+// }
 
-    try wb.writeOperand(42.0);
-    const ts = try wb.typeSig();
+// test "infer type of constant" {
+//     var wb = try WordBuffer.init(std.testing.allocator);
+//     defer wb.deinit();
 
-    try std.testing.expectEqual(@as(u8, 0), ts.inputs);
-    try std.testing.expectEqual(@as(u8, 1), ts.outputs);
-}
+//     try wb.writeOperand(42.0);
+//     const ts = try wb.typeSig();
 
-test "infer type of square" {
-    var wb = try WordBuffer.init(std.testing.allocator);
-    defer wb.deinit();
+//     try std.testing.expectEqual(@as(u8, 0), ts.inputs);
+//     try std.testing.expectEqual(@as(u8, 1), ts.outputs);
+// }
 
-    try wb.writeEntry(dup);
-    try wb.writeEntry(mul);
+// test "infer type of square" {
+//     var wb = try WordBuffer.init(std.testing.allocator);
+//     defer wb.deinit();
+
+//     try wb.writeEntry(BuiltIns.dup);
+//     try wb.writeEntry(BuiltIns.mul);
     
-    const ts = try wb.typeSig();
+//     const ts = try wb.typeSig();
 
-    try std.testing.expectEqual(TypeSig {.inputs = 1, .outputs = 1}, ts);
-}
+//     try std.testing.expectEqual(TypeSig {.inputs = 1, .outputs = 1}, ts);
+// }
+
+// test "infer type of cube" {
+//     var wb = try WordBuffer.init(std.testing.allocator);
+//     defer wb.deinit();
+
+//     try wb.writeEntry(BuiltIns.dup);
+//     try wb.writeEntry(BuiltIns.dup);
+//     try wb.writeEntry(BuiltIns.mul);
+//     try wb.writeEntry(BuiltIns.mul);
+    
+//     const ts = try wb.typeSig();
+
+//     try std.testing.expectEqual(TypeSig {.inputs = 1, .outputs = 1}, ts);
+// }
 
 // SICP Tests
 
-test "eval empty input" {
-    try test_eval("", "");
-}
+// test "eval empty input" {
+//     try test_eval("", "");
+// }
 
-test "primitive expression" {
-    try test_eval("486", "486");
-}
+// test "primitive expression" {
+//     try test_eval("486", "486");
+// }
 
-test "add ints" {
-    try test_eval("486", "137 349 +");
-}
+// test "add ints" {
+//     try test_eval("486", "137 349 +");
+// }
 
-test "subtract ints" {
-    try test_eval("666", "1000 334 -");
-}
+// test "subtract ints" {
+//     try test_eval("666", "1000 334 -");
+// }
 
-test "divide ints" {
-    try test_eval("2", "10 5 /");
-}
+// test "divide ints" {
+//     try test_eval("2", "10 5 /");
+// }
 
-test "add real to int" {
-    try test_eval("12.7", "2.7 10 +");
-}
+// test "add real to int" {
+//     try test_eval("12.7", "2.7 10 +");
+// }
 
-test "add multiple ints" {
-    try test_eval("75", "21 35 + 12 + 7 +");
-}
+// test "add multiple ints" {
+//     try test_eval("75", "21 35 + 12 + 7 +");
+// }
 
-test "multiply multiple ints" {
-    try test_eval("1200", "25 4 * 12 *");
-}
+// test "multiply multiple ints" {
+//     try test_eval("1200", "25 4 * 12 *");
+// }
 
-test "nested combinations" {
-    try test_eval("19", "3 5 * 10 6 - +");
-}
+// test "nested combinations" {
+//     try test_eval("19", "3 5 * 10 6 - +");
+// }
 
-test "relatively simple expressions" {
-    try test_eval("57", "3 2 4 * 3 5 + + * 10 7 - 6 + +");
-}
+// test "relatively simple expressions" {
+//     try test_eval("57", "3 2 4 * 3 5 + + * 10 7 - 6 + +");
+// }
 
-test "naming a value" {
-    const input = 
-        \\ : size 2 ;
-        \\ size
-        \\ 5 size *
-    ;
+// test "naming a value" {
+//     const input = 
+//         \\ : size 2 ;
+//         \\ size
+//         \\ 5 size *
+//     ;
 
-    try test_eval("2 10", input);
-}
+//     try test_eval("2 10", input);
+// }
 
 test "further examples of defining a value" {
     const input =
         \\ : pi 3.14159 ;
         \\ : radius 10 ;
         \\ radius radius * pi *
-        \\ : circumference 2 pi * radius * ;
-        \\ circumference
+        //\\ : circumference 2 pi * radius * ;
+        //\\ circumference
     ;
 
     try test_eval("314.159 62.8318", input);
 }
 
-test "procedure definition" {
-    const input =
-        \\ : square dup * ;
-        \\ 21 square
-        \\ 2 5 + square
-        \\ 3 square square
-    ;
+// test "procedure definition" {
+//     const input =
+//         \\ : square dup * ;
+//         \\ 21 square
+//         \\ 2 5 + square
+//         \\ 3 square square
+//     ;
 
-    try test_eval("441 49 81", input);
-}
+//     try test_eval("441 49 81", input);
+// }
 
 pub fn main() void {
     
