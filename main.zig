@@ -30,14 +30,14 @@ const WordBuffer = struct {
     operands: std.ArrayList(Operand),
     addresses: std.ArrayList(Address),
     code: std.ArrayList(u8),
-    type_sigs: std.ArrayList(TypeSig),
+    type_sig: TypeSig,
 
     pub fn init(allocator: std.mem.Allocator) !WordBuffer {
         return WordBuffer {
             .operands = try arrayList(Operand, allocator),
             .addresses = try arrayList(Address, allocator),
             .code = try arrayList(u8, allocator),
-            .type_sigs = try arrayList(TypeSig, allocator)
+            .type_sig = TypeSig.init(0, 0)
         };
     }
 
@@ -45,7 +45,6 @@ const WordBuffer = struct {
         self.operands.deinit();
         self.addresses.deinit();
         self.code.deinit();
-        self.type_sigs.deinit();
     }
 
     pub fn toEntryWord(self: *@This()) !Word {
@@ -67,7 +66,7 @@ const WordBuffer = struct {
     }
 
     pub fn writeEntry(self: *@This(), entry: DictEntry) !void {
-        try self.type_sigs.append(entry.type_sig); 
+        self.type_sig = self.type_sig.compose(entry.type_sig); 
 
         const impl = entry.implementation;
         switch(entry.implementation) {
@@ -85,7 +84,7 @@ const WordBuffer = struct {
     }
 
     pub fn writeOperand(self: *@This(), operand: Operand) !void {
-        try self.type_sigs.append(TypeSig {.in = 0, .out = 1});
+        self.type_sig = self.type_sig.compose(TypeSig.init(0, 1));
 
         try self.code.appendSlice(&[_]u8{
             @enumToInt(OpCode.push),
@@ -94,34 +93,11 @@ const WordBuffer = struct {
         try self.operands.append(operand);
     }
 
-    pub fn typeSig(self: @This()) TypeSigErr!TypeSig {
-        const tss = self.type_sigs.items;
-
-        if (tss.len == 0) return TypeSigErr.Empty;
-        
-        var first_ts = tss[0];
-
-
-        var i: usize = 1;
-        const inputs = first_ts.in;
-        var outputs = first_ts.out;
-
-        while (i < tss.len) : (i += 1) {
-            const next = tss[i];
-            outputs += (next.out - next.in);
-        }    
-
-        return TypeSig {
-            .in= inputs,
-            .out = outputs
-        };
-    }
-
     pub fn clear(self: *@This()) void {
         self.operands.clearRetainingCapacity();
         self.addresses.clearRetainingCapacity();
         self.code.clearRetainingCapacity();
-        self.type_sigs.clearRetainingCapacity();
+        self.type_sig = TypeSig.init(0, 0);
     }
 };
 
@@ -276,7 +252,7 @@ const BuiltIns = struct {
     };
 
     const dup = DictEntry{
-        .type_sig = TypeSig {.in= 1, .out = 2},
+        .type_sig = TypeSig {.in = 1, .out = 2},
         .implementation = .{.op_code = OpCode.dup}
     };
 };
@@ -295,17 +271,28 @@ const TypeSig = struct {
     in: i8,
     out: i8,
 
+    pub fn init(in: i8, out: i8) TypeSig {
+        return TypeSig {.in = in, .out = out};
+    }
+
     pub fn format(
         value: @This(),
         comptime _: []const u8,
         _: std.fmt.FormatOptions,
         writer: anytype
     ) !void {
-        try writer.print("{d} -> {d}", .{value.inputs, value.out});
+        try writer.print("{d} -> {d}", .{value.in, value.out});
     }
 
-    pub fn compose(self: @This(), _: TypeSig) TypeSig {
-        return self;
+    pub fn compose(self: @This(), other: TypeSig) TypeSig {
+        const max_depth_read = @maximum(self.in, other.in - self.out);
+        // -1 + 2 - 2 + 1
+        const final_stack_pos = -self.in + self.out - other.in + other.out;
+
+        return TypeSig {
+            .in = max_depth_read,
+            .out = max_depth_read - final_stack_pos
+        };
     }
 };
 
@@ -362,7 +349,7 @@ const Interpreter = struct {
             } else if (std.mem.eql(u8, token, ";")) {
                 const addr = try self.vm.store(word_buffer);
                 const entry = DictEntry{
-                    .type_sig = try word_buffer.typeSig(),
+                    .type_sig = word_buffer.type_sig,
                     .implementation = .{
                         .address = addr    
                     }
@@ -395,115 +382,137 @@ fn test_eval(actual: []const u8, expected: []const u8) !void {
     return expectStrings(actual, try interpreter.eval(expected));
 }
 
-test "infer type of constant" {
+// test "infer type of constant" {
+//     var wb = try WordBuffer.init(std.testing.allocator);
+//     defer wb.deinit();
+
+//     try wb.writeOperand(42.0);
+//     try std.testing.expectEqual(TypeSig.init(0, 1), wb.type_sig);
+// }
+
+test "infer type of two constants" {
     var wb = try WordBuffer.init(std.testing.allocator);
     defer wb.deinit();
 
     try wb.writeOperand(42.0);
-    const ts = try wb.typeSig();
-    try std.testing.expectEqual(TypeSig {.in = 0, .out =1 }, ts);
+    try wb.writeOperand(39.0);
+
+    const actual: TypeSig= wb.type_sig;
+    const expected: TypeSig = TypeSig.init(0, 2);
+    try std.testing.expectEqual(expected, actual);
+
 }
 
-test "infer type of square" {
-    var wb = try WordBuffer.init(std.testing.allocator);
-    defer wb.deinit();
+// test "infer type of square" {
+//     var wb = try WordBuffer.init(std.testing.allocator);
+//     defer wb.deinit();
 
-    try wb.writeEntry(BuiltIns.dup);
-    try wb.writeEntry(BuiltIns.mul);
+//     try wb.writeEntry(BuiltIns.dup);
+//     try wb.writeEntry(BuiltIns.mul);
     
-    const ts = try wb.typeSig();
+//     try std.testing.expectEqual(TypeSig.init(1, 1), wb.type_sig);
+// }
 
-    try std.testing.expectEqual(TypeSig {.in= 1, .out = 1}, ts);
-}
+// test "infer type of cube" {
+//     var wb = try WordBuffer.init(std.testing.allocator);
+//     defer wb.deinit();
 
-test "infer type of cube" {
-    var wb = try WordBuffer.init(std.testing.allocator);
-    defer wb.deinit();
-
-    try wb.writeEntry(BuiltIns.dup);
-    try wb.writeEntry(BuiltIns.dup);
-    try wb.writeEntry(BuiltIns.mul);
-    try wb.writeEntry(BuiltIns.mul);
+//     try wb.writeEntry(BuiltIns.dup);
+//     try wb.writeEntry(BuiltIns.dup);
+//     try wb.writeEntry(BuiltIns.mul);
+//     try wb.writeEntry(BuiltIns.mul);
     
-    const ts = try wb.typeSig();
+//     try std.testing.expectEqual(TypeSig {.in= 1, .out = 1}, wb.type_sig);
+// }
 
-    try std.testing.expectEqual(TypeSig {.in= 1, .out = 1}, ts);
-}
+// test "type of 3 4" {
+//     try std.testing.expectEqual(
+//         TypeSig.init(0, 2),
+//         TypeSig.init(0, 1).compose(TypeSig.init(0, 1))
+//     );
+// }
+
+// test  "type of 3 *" {
+//     try std.testing.expectEqual(
+//         TypeSig.init(1, 1),
+//         TypeSig.init(0, 1).compose(TypeSig.init(2, 1))
+//     );
+// }
 
 // SICP Tests
 
-test "eval empty input" {
-    try test_eval("", "");
-}
+// test "eval empty input" {
+//     try test_eval("", "");
+// }
 
-test "primitive expression" {
-    try test_eval("486", "486");
-}
+// test "primitive expression" {
+//     try test_eval("486", "486");
+// }
 
-test "add ints" {
-    try test_eval("486", "137 349 +");
-}
+// test "add ints" {
+//     try test_eval("486", "137 349 +");
+// }
 
-test "subtract ints" {
-    try test_eval("666", "1000 334 -");
-}
+// test "subtract ints" {
+//     try test_eval("666", "1000 334 -");
+// }
 
-test "divide ints" {
-    try test_eval("2", "10 5 /");
-}
+// test "divide ints" {
+//     try test_eval("2", "10 5 /");
+// }
 
-test "add real to int" {
-    try test_eval("12.7", "2.7 10 +");
-}
+// test "add real to int" {
+//     try test_eval("12.7", "2.7 10 +");
+// }
 
-test "add multiple ints" {
-    try test_eval("75", "21 35 + 12 + 7 +");
-}
+// test "add multiple ints" {
+//     try test_eval("75", "21 35 + 12 + 7 +");
+// }
 
-test "multiply multiple ints" {
-    try test_eval("1200", "25 4 * 12 *");
-}
+// test "multiply multiple ints" {
+//     try test_eval("1200", "25 4 * 12 *");
+// }
 
-test "nested combinations" {
-    try test_eval("19", "3 5 * 10 6 - +");
-}
+// test "nested combinations" {
+//     try test_eval("19", "3 5 * 10 6 - +");
+// }
 
-test "relatively simple expressions" {
-    try test_eval("57", "3 2 4 * 3 5 + + * 10 7 - 6 + +");
-}
+// test "relatively simple expressions" {
+//     try test_eval("57", "3 2 4 * 3 5 + + * 10 7 - 6 + +");
+// }
 
-test "naming a value" {
-    const input = 
-        \\ : size 2 ;
-        \\ size
-        \\ 5 size *
-    ;
+// test "naming a value" {
+//     const input = 
+//         \\ : size 2 ;
+//         \\ size
+//         \\ 5 size *
+//     ;
 
-    try test_eval("2 10", input);
-}
+//     try test_eval("2 10", input);
+// }
 
-test "further examples of defining a value" {
-    const input =
-        \\ : pi 3.14159 ;
-        \\ : radius 10 ;
-        \\ radius radius * pi *
-        \\ : circumference 2 pi * radius * ;
-        \\ circumference
-    ;
+// test "further examples of defining a value" {
+//     const input =
+//         \\ : pi 3.14159 ;
+//         \\ : radius 10 ;
+//         \\ radius radius * pi *
+//         \\ : circumference 2 pi * radius * ;
+//         \\ circumference
+//     ;
 
-    try test_eval("314.159 62.8318", input);
-}
+//     try test_eval("314.159 62.8318", input);
+// }
 
-test "procedure definition" {
-    const input =
-        \\ : square dup * ;
-        \\ 21 square
-        \\ 2 5 + square
-        \\ 3 square square
-    ;
+// test "procedure definition" {
+//     const input =
+//         \\ : square dup * ;
+//         \\ 21 square
+//         \\ 2 5 + square
+//         \\ 3 square square
+//     ;
 
-    try test_eval("441 49 81", input);
-}
+//     try test_eval("441 49 81", input);
+// }
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
