@@ -98,43 +98,52 @@ const WordBuffer = struct {
     }
 
     pub fn typeSig(self: @This()) TypeSigErr!TypeSig {
-        std.debug.print("\nType check begins...\n", .{});
-        std.debug.print("\ncode...{d}\n", .{self.code.items});
-        std.debug.print("\nall type sigs...{s}\n", .{self.type_sigs.items});
-
         const tss = self.type_sigs.items;
 
         if (tss.len == 0) return TypeSigErr.Empty;
         
-        var result = tss[0];
+        var first_ts = tss[0];
 
-        //std.debug.print("\n first type sig {s}\n", .{result});
+        // radius   radius  *       pi      *
+        // 0 -> 1,  0 -> 1, 2 -> 1, 0 -> 1, 2 -> 1
+        // ANSWER: 0 -> 1
+        
+        // 3        4
+        // 0 -> 1   0 -> 1
+        // ANSWER: 0 -> 2
 
-        // curr = (0, 1), next = (0, 1)
-        // curr = (0, 2), next = (2, 1)
+        // dup      *
+        // 1 -> 2   2 -> 1
+        // Answer: 1 -> 1
+
+        // dup      dup     *       *
+        // 1 -> 2   1 -> 2  2 -> 1  2 -> 1
+        // ANSWER: 1 -> 1
+
+        //  dup dup     *
+        // (2 -> 3,     2 -> 1) => (1 -> 2)
 
 
         var i: usize = 1;
+        const inputs = first_ts.inputs;
+        var outputs = first_ts.outputs;
+
         while (i < tss.len) : (i += 1) {
-            std.debug.print("\nResult before: {s}...\n", .{result});
-
-            const curr = tss[i];
-
-            if (result.outputs < curr.inputs) {
-                return TypeSigErr.ArityMismatch;
-            }
-
-            result = TypeSig {
-                .inputs = result.outputs - curr.inputs,
-                .outputs = result.outputs + curr.outputs
-            };
-
-            std.debug.print("\nResult after: {s}...\n", .{result});
-         
-
+            const next = tss[i];
+            outputs += (next.outputs - next.inputs);
         }    
 
-        return result;
+        return TypeSig {
+            .inputs = inputs,
+            .outputs = outputs
+        };
+    }
+
+    pub fn clear(self: *@This()) void {
+        self.operands.clearRetainingCapacity();
+        self.addresses.clearRetainingCapacity();
+        self.code.clearRetainingCapacity();
+        self.type_sigs.clearRetainingCapacity();
     }
 };
 
@@ -240,7 +249,8 @@ const VM = struct {
     pub fn print(self: *@This(), output_buffer: *std.ArrayList(u8)) !void {
         const writer = output_buffer.writer();
 
-        // TODO: assumes stack length > 1
+        if (self.ds.items.len == 0) return;
+
         try writer.print("{d}", .{self.ds.items[0]});
 
         if (self.ds.items.len > 1) {
@@ -309,8 +319,8 @@ const std_library = [_]std.meta.Tuple(&.{ []const u8, DictEntry }) {
 const TypeSigErr = error { Empty, ArityMismatch };
 
 const TypeSig = struct {
-    inputs: u8,
-    outputs: u8,
+    inputs: i8,
+    outputs: i8,
 
     pub fn format(
         value: @This(),
@@ -318,12 +328,7 @@ const TypeSig = struct {
         _: std.fmt.FormatOptions,
         writer: anytype
     ) !void {
-
-        //(inputs -> outputs)
-
-
         try writer.print("{d} -> {d}", .{value.inputs, value.outputs});
-
     }
 };
 
@@ -363,6 +368,9 @@ const Interpreter = struct {
     pub fn eval(self: *@This(), s: []const u8) ![]const u8 {
         if (s.len == 0) return s;
 
+        self.output_buffer.clearRetainingCapacity();
+        self.entry_word_buffer.clear();
+
         var tokens = std.mem.tokenize(u8, s, &std.ascii.spaces);
 
         var word_buffer: *WordBuffer = &self.entry_word_buffer;
@@ -377,7 +385,7 @@ const Interpreter = struct {
             } else if (std.mem.eql(u8, token, ";")) {
                 const addr = try self.vm.store(word_buffer);
                 const entry = DictEntry{
-                    .type_sig = TypeSig {.inputs = 0, .outputs = 0},
+                    .type_sig = try word_buffer.typeSig(),
                     .implementation = .{
                         .address = addr    
                     }
@@ -390,18 +398,16 @@ const Interpreter = struct {
             } else if (std.fmt.parseFloat(Operand, token)) |operand| {
                 try word_buffer.writeOperand(operand);
             } else |_| {
-                std.debug.print("can't find token: {s}", .{token});
                 return "unknown token";
             }
         }
-
-        const ts = try self.entry_word_buffer.typeSig();
-        std.debug.print("\n type of entry: {s}\n", .{ts});
 
         const entry_word = try self.entry_word_buffer.toEntryWord();
 
         try self.vm.exec(&entry_word);
         try self.vm.print(&self.output_buffer);
+        // NOTE: assuming we print this to the screen immediately, as underlying
+        // buffer will no longer be valid next time it's called
         return self.output_buffer.items;
     }
 };
@@ -412,136 +418,137 @@ fn test_eval(actual: []const u8, expected: []const u8) !void {
     return expectStrings(actual, try interpreter.eval(expected));
 }
 
-test "bug" {
-    const foo = [_]std.meta.Tuple(&.{ []const u8, i32 }) {
-        .{"one", 1},
-        .{"two", 2},
-        .{"three"}
-    };
+test "infer type of constant" {
+    var wb = try WordBuffer.init(std.testing.allocator);
+    defer wb.deinit();
 
-    for (foo) |f| {
-        std.debug.print("{d}", .{f[1]});
-    }
-
-    try std.testing.expectEqual(foo[0][1], 1);
+    try wb.writeOperand(42.0);
+    const ts = try wb.typeSig();
+    try std.testing.expectEqual(TypeSig {.inputs = 0, .outputs =1 }, ts);
 }
 
-// test "detects stack underflow" {
-//     try test_eval("ArityMismatch", "1 +");
-// }
+test "infer type of square" {
+    var wb = try WordBuffer.init(std.testing.allocator);
+    defer wb.deinit();
 
-// test "infer type of constant" {
-//     var wb = try WordBuffer.init(std.testing.allocator);
-//     defer wb.deinit();
-
-//     try wb.writeOperand(42.0);
-//     const ts = try wb.typeSig();
-
-//     try std.testing.expectEqual(@as(u8, 0), ts.inputs);
-//     try std.testing.expectEqual(@as(u8, 1), ts.outputs);
-// }
-
-// test "infer type of square" {
-//     var wb = try WordBuffer.init(std.testing.allocator);
-//     defer wb.deinit();
-
-//     try wb.writeEntry(BuiltIns.dup);
-//     try wb.writeEntry(BuiltIns.mul);
+    try wb.writeEntry(BuiltIns.dup);
+    try wb.writeEntry(BuiltIns.mul);
     
-//     const ts = try wb.typeSig();
+    const ts = try wb.typeSig();
 
-//     try std.testing.expectEqual(TypeSig {.inputs = 1, .outputs = 1}, ts);
-// }
+    try std.testing.expectEqual(TypeSig {.inputs = 1, .outputs = 1}, ts);
+}
 
-// test "infer type of cube" {
-//     var wb = try WordBuffer.init(std.testing.allocator);
-//     defer wb.deinit();
+test "infer type of cube" {
+    var wb = try WordBuffer.init(std.testing.allocator);
+    defer wb.deinit();
 
-//     try wb.writeEntry(BuiltIns.dup);
-//     try wb.writeEntry(BuiltIns.dup);
-//     try wb.writeEntry(BuiltIns.mul);
-//     try wb.writeEntry(BuiltIns.mul);
+    try wb.writeEntry(BuiltIns.dup);
+    try wb.writeEntry(BuiltIns.dup);
+    try wb.writeEntry(BuiltIns.mul);
+    try wb.writeEntry(BuiltIns.mul);
     
-//     const ts = try wb.typeSig();
+    const ts = try wb.typeSig();
 
-//     try std.testing.expectEqual(TypeSig {.inputs = 1, .outputs = 1}, ts);
-// }
+    try std.testing.expectEqual(TypeSig {.inputs = 1, .outputs = 1}, ts);
+}
 
 // SICP Tests
 
-// test "eval empty input" {
-//     try test_eval("", "");
-// }
+test "eval empty input" {
+    try test_eval("", "");
+}
 
-// test "primitive expression" {
-//     try test_eval("486", "486");
-// }
+test "primitive expression" {
+    try test_eval("486", "486");
+}
 
-// test "add ints" {
-//     try test_eval("486", "137 349 +");
-// }
+test "add ints" {
+    try test_eval("486", "137 349 +");
+}
 
-// test "subtract ints" {
-//     try test_eval("666", "1000 334 -");
-// }
+test "subtract ints" {
+    try test_eval("666", "1000 334 -");
+}
 
-// test "divide ints" {
-//     try test_eval("2", "10 5 /");
-// }
+test "divide ints" {
+    try test_eval("2", "10 5 /");
+}
 
-// test "add real to int" {
-//     try test_eval("12.7", "2.7 10 +");
-// }
+test "add real to int" {
+    try test_eval("12.7", "2.7 10 +");
+}
 
-// test "add multiple ints" {
-//     try test_eval("75", "21 35 + 12 + 7 +");
-// }
+test "add multiple ints" {
+    try test_eval("75", "21 35 + 12 + 7 +");
+}
 
-// test "multiply multiple ints" {
-//     try test_eval("1200", "25 4 * 12 *");
-// }
+test "multiply multiple ints" {
+    try test_eval("1200", "25 4 * 12 *");
+}
 
-// test "nested combinations" {
-//     try test_eval("19", "3 5 * 10 6 - +");
-// }
+test "nested combinations" {
+    try test_eval("19", "3 5 * 10 6 - +");
+}
 
-// test "relatively simple expressions" {
-//     try test_eval("57", "3 2 4 * 3 5 + + * 10 7 - 6 + +");
-// }
+test "relatively simple expressions" {
+    try test_eval("57", "3 2 4 * 3 5 + + * 10 7 - 6 + +");
+}
 
-// test "naming a value" {
-//     const input = 
-//         \\ : size 2 ;
-//         \\ size
-//         \\ 5 size *
-//     ;
+test "naming a value" {
+    const input = 
+        \\ : size 2 ;
+        \\ size
+        \\ 5 size *
+    ;
 
-//     try test_eval("2 10", input);
-// }
+    try test_eval("2 10", input);
+}
 
 test "further examples of defining a value" {
     const input =
         \\ : pi 3.14159 ;
         \\ : radius 10 ;
         \\ radius radius * pi *
-        //\\ : circumference 2 pi * radius * ;
-        //\\ circumference
+        \\ : circumference 2 pi * radius * ;
+        \\ circumference
     ;
 
     try test_eval("314.159 62.8318", input);
 }
 
-// test "procedure definition" {
-//     const input =
-//         \\ : square dup * ;
-//         \\ 21 square
-//         \\ 2 5 + square
-//         \\ 3 square square
-//     ;
+test "procedure definition" {
+    const input =
+        \\ : square dup * ;
+        \\ 21 square
+        \\ 2 5 + square
+        \\ 3 square square
+    ;
 
-//     try test_eval("441 49 81", input);
-// }
+    try test_eval("441 49 81", input);
+}
 
-pub fn main() void {
-    
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    var interpreter = try Interpreter.init(allocator);
+    defer interpreter.deinit();
+
+    const stdin = std.io.getStdIn().reader();
+    const stdout = std.io.getStdOut().writer();
+
+    var input: std.ArrayList(u8) = try arrayList(u8, allocator);
+
+    while (true) {
+        try stdout.print("> ", .{});
+        // Read
+        try stdin.readUntilDelimiterArrayList(&input, '\n', 512);
+        // Eval
+        var output = try interpreter.eval(input.items);
+        // Print
+        try stdout.print("{s}\n", .{output});
+        // Loop
+        input.clearRetainingCapacity();
+    }
 }
