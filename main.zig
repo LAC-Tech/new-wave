@@ -85,10 +85,7 @@ const WordBuffer = struct {
     }
 
     pub fn writeOperand(self: *@This(), operand: Operand) !void {
-        try self.type_sigs.append(TypeSig {
-            .inputs = 0,
-            .outputs = 1
-        });
+        try self.type_sigs.append(TypeSig {.in = 0, .out = 1});
 
         try self.code.appendSlice(&[_]u8{
             @enumToInt(OpCode.push),
@@ -104,38 +101,19 @@ const WordBuffer = struct {
         
         var first_ts = tss[0];
 
-        // radius   radius  *       pi      *
-        // 0 -> 1,  0 -> 1, 2 -> 1, 0 -> 1, 2 -> 1
-        // ANSWER: 0 -> 1
-        
-        // 3        4
-        // 0 -> 1   0 -> 1
-        // ANSWER: 0 -> 2
-
-        // dup      *
-        // 1 -> 2   2 -> 1
-        // Answer: 1 -> 1
-
-        // dup      dup     *       *
-        // 1 -> 2   1 -> 2  2 -> 1  2 -> 1
-        // ANSWER: 1 -> 1
-
-        //  dup dup     *
-        // (2 -> 3,     2 -> 1) => (1 -> 2)
-
 
         var i: usize = 1;
-        const inputs = first_ts.inputs;
-        var outputs = first_ts.outputs;
+        const inputs = first_ts.in;
+        var outputs = first_ts.out;
 
         while (i < tss.len) : (i += 1) {
             const next = tss[i];
-            outputs += (next.outputs - next.inputs);
+            outputs += (next.out - next.in);
         }    
 
         return TypeSig {
-            .inputs = inputs,
-            .outputs = outputs
+            .in= inputs,
+            .out = outputs
         };
     }
 
@@ -261,11 +239,6 @@ const VM = struct {
     }
 };
 
-test "can init and deinit VM" {
-    const vm = try VM.init(std.testing.allocator);
-    vm.deinit();
-}
-
 const DictEntryTag = enum {
     op_code,
     address,
@@ -283,27 +256,27 @@ const Dict = std.StringHashMap(DictEntry);
 
 const BuiltIns = struct {
     const add = DictEntry {
-        .type_sig = TypeSig {.inputs = 2, .outputs = 1},
+        .type_sig = TypeSig {.in= 2, .out = 1},
         .implementation = .{.op_code = OpCode.add}
     };
 
     const sub = DictEntry {
-        .type_sig = TypeSig {.inputs = 2, .outputs = 1},
+        .type_sig = TypeSig {.in= 2, .out = 1},
         .implementation = .{.op_code = OpCode.sub}
     };
 
     const mul = DictEntry {
-        .type_sig = TypeSig {.inputs = 2, .outputs = 1},
+        .type_sig = TypeSig {.in= 2, .out = 1},
         .implementation = .{.op_code = OpCode.mul}
     };
 
     const div = DictEntry {
-        .type_sig = TypeSig {.inputs = 2, .outputs = 1},
+        .type_sig = TypeSig {.in= 2, .out = 1},
         .implementation = .{.op_code = OpCode.div}
     };
 
     const dup = DictEntry{
-        .type_sig = TypeSig {.inputs = 1, .outputs = 2},
+        .type_sig = TypeSig {.in= 1, .out = 2},
         .implementation = .{.op_code = OpCode.dup}
     };
 };
@@ -319,8 +292,8 @@ const std_library = [_]std.meta.Tuple(&.{ []const u8, DictEntry }) {
 const TypeSigErr = error { Empty, ArityMismatch };
 
 const TypeSig = struct {
-    inputs: i8,
-    outputs: i8,
+    in: i8,
+    out: i8,
 
     pub fn format(
         value: @This(),
@@ -328,7 +301,11 @@ const TypeSig = struct {
         _: std.fmt.FormatOptions,
         writer: anytype
     ) !void {
-        try writer.print("{d} -> {d}", .{value.inputs, value.outputs});
+        try writer.print("{d} -> {d}", .{value.inputs, value.out});
+    }
+
+    pub fn compose(self: @This(), _: TypeSig) TypeSig {
+        return self;
     }
 };
 
@@ -424,7 +401,7 @@ test "infer type of constant" {
 
     try wb.writeOperand(42.0);
     const ts = try wb.typeSig();
-    try std.testing.expectEqual(TypeSig {.inputs = 0, .outputs =1 }, ts);
+    try std.testing.expectEqual(TypeSig {.in = 0, .out =1 }, ts);
 }
 
 test "infer type of square" {
@@ -436,7 +413,7 @@ test "infer type of square" {
     
     const ts = try wb.typeSig();
 
-    try std.testing.expectEqual(TypeSig {.inputs = 1, .outputs = 1}, ts);
+    try std.testing.expectEqual(TypeSig {.in= 1, .out = 1}, ts);
 }
 
 test "infer type of cube" {
@@ -450,7 +427,7 @@ test "infer type of cube" {
     
     const ts = try wb.typeSig();
 
-    try std.testing.expectEqual(TypeSig {.inputs = 1, .outputs = 1}, ts);
+    try std.testing.expectEqual(TypeSig {.in= 1, .out = 1}, ts);
 }
 
 // SICP Tests
