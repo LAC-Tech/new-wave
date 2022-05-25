@@ -1,6 +1,5 @@
 //const mem = @import("mem");
 const std = @import("std");
-const expectStrings = std.testing.expectEqualStrings;
 
 const Operand = f64;
 const Address = usize;
@@ -384,43 +383,51 @@ const Interpreter = struct {
     }
 };
 
-fn test_eval(actual: []const u8, expected: []const u8) !void {
+fn test_eval(expected: []const u8, actual: []const u8) !void {
     var interpreter = try Interpreter.init(std.testing.allocator);
     defer interpreter.deinit();
-    return expectStrings(actual, try interpreter.eval(expected));
+    return std.testing.expectEqualStrings(
+        expected, try interpreter.eval(actual));
+
+}
+
+fn test_multiline_eval(actual: []const []const u8, expected: []const []const u8) !void {
+    const allocator = std.testing.allocator;
+
+    var interpreter = try Interpreter.init(allocator);
+    defer interpreter.deinit();
+
+    
+
+    return std.testing.expectEqualStrings(
+        try std.mem.join(allocator, "", actual), 
+        try std.mem.join(allocator, "", expected));
+
 }
 
 test "infer type of constant" {
-    try test_eval("42 : num", "42");
+    try test_eval("42 : num\n", "42");
 }
 
 test "infer type of two constants" {
-    try test_eval("42 39 : num num", "42 39");
+    try test_eval("42 39 : num num\n", "42 39");
 }
 
 test "infer type of square" {
-    try test_eval("sq : num -> num", ": sq dup * ;");
+    try test_eval("sq : num -> num\n", ": sq dup * ;");
 }
 
 test "infer type of cube" {
-    try test_eval("cube : num -> num", ": cube dup dup * * ;");
+    try test_eval("cube : num -> num\n", ": cube dup dup * * ;");
 }
 
 test  "type of add one" {
-    try test_eval("add1 : num -> num", ": add1 1 + ;");
+    try test_eval("add1 : num -> num\n", ": add1 1 + ;");
 }
 
 test "type of two constants" {
-    try test_eval("3 4 : num num", "3 4");
+    try test_eval("3 4 : num num\n", "3 4");
 }
-
-// test "make nested definitions with multiple calls to eval" {
-//     var interpreter = try Interpreter.init(std.testing.allocator);
-//     defer interpreter.deinit();
-    
-//     try in
-//     return expectStrings(actual, try interpreter.eval(expected));
-// }
 
 // SICP Tests
 
@@ -429,49 +436,54 @@ test "eval empty input" {
 }
 
 test "primitive expression" {
-    try test_eval("486 : num", "486");
+    try test_eval("486 : num\n", "486");
 }
 
 test "add ints" {
-    try test_eval("486 : num", "137 349 +");
+    try test_eval("486 : num\n", "137 349 +");
 }
 
 test "subtract ints" {
-    try test_eval("666 : num", "1000 334 -");
+    try test_eval("666 : num\n", "1000 334 -");
 }
 
 test "divide ints" {
-    try test_eval("2 : num", "10 5 /");
+    try test_eval("2 : num\n", "10 5 /");
 }
 
 test "add real to int" {
-    try test_eval("12.7 : num", "2.7 10 +");
+    try test_eval("12.7 : num\n", "2.7 10 +");
 }
 
 test "add multiple ints" {
-    try test_eval("75 : num", "21 35 + 12 + 7 +");
+    try test_eval("75 : num\n", "21 35 + 12 + 7 +");
 }
 
 test "multiply multiple ints" {
-    try test_eval("1200 : num", "25 4 * 12 *");
+    try test_eval("1200 : num\n", "25 4 * 12 *");
 }
 
 test "nested combinations" {
-    try test_eval("19 : num", "3 5 * 10 6 - +");
+    try test_eval("19 : num\n", "3 5 * 10 6 - +");
 }
 
 test "relatively simple expressions" {
-    try test_eval("57 : num", "3 2 4 * 3 5 + + * 10 7 - 6 + +");
+    try test_eval("57 : num\n", "3 2 4 * 3 5 + + * 10 7 - 6 + +");
 }
 
 test "naming a value" {
-    const input = 
-        \\ : size 2 ;
-        \\ size
-        \\ 5 size *
-    ;
+    const actual = [_][] const u8{
+        ": size 2 ;",
+        "size",
+        "5 size *"
+    };
 
-    try test_eval("2 10", input);
+    const expected = [_][] const u8{
+        "size : -> num",
+        "2 10 : num num"
+    };
+
+    try test_multiline_eval(&actual, &expected);
 }
 
 // test "further examples of defining a value" {
