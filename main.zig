@@ -68,17 +68,16 @@ const WordBuffer = struct {
     pub fn writeEntry(self: *@This(), entry: DictEntry) !void {
         self.type_sig = self.type_sig.compose(entry.type_sig); 
 
-        const impl = entry.implementation;
-        switch(entry.implementation) {
+        switch(entry.impl) {
             .op_code => {
-                try self.code.append(@enumToInt(impl.op_code));
+                try self.code.append(@enumToInt(entry.impl.op_code));
             },
             .address => {
                 try self.code.appendSlice(&[_]u8{
                     @enumToInt(OpCode.call),
-                    @intCast(u8, impl.address)
+                    @intCast(u8, entry.impl.address)
                 });
-                try self.addresses.append(impl.address);
+                try self.addresses.append(entry.impl.address);
             }   
         }
     }
@@ -200,9 +199,7 @@ const VM = struct {
         return &self.ds.items[self.ds.items.len-1];
     }
 
-    pub fn print(self: *@This(), output_buffer: *std.ArrayList(u8)) !void {
-        const writer = output_buffer.writer();
-
+    pub fn print(self: *@This(), writer: anytype) !void {
         if (self.ds.items.len == 0) return;
 
         try writer.print("{d}", .{self.ds.items[0]});
@@ -222,7 +219,7 @@ const DictEntryTag = enum {
 
 const DictEntry = struct {
     type_sig: TypeSig,
-    implementation: union(DictEntryTag) {
+    impl: union(DictEntryTag) {
         op_code: OpCode,
         address: Address
     }
@@ -230,39 +227,12 @@ const DictEntry = struct {
 
 const Dict = std.StringHashMap(DictEntry);
 
-const BuiltIns = struct {
-    const add = DictEntry {
-        .type_sig = TypeSig {.in= 2, .out = 1},
-        .implementation = .{.op_code = OpCode.add}
-    };
-
-    const sub = DictEntry {
-        .type_sig = TypeSig {.in= 2, .out = 1},
-        .implementation = .{.op_code = OpCode.sub}
-    };
-
-    const mul = DictEntry {
-        .type_sig = TypeSig {.in= 2, .out = 1},
-        .implementation = .{.op_code = OpCode.mul}
-    };
-
-    const div = DictEntry {
-        .type_sig = TypeSig {.in= 2, .out = 1},
-        .implementation = .{.op_code = OpCode.div}
-    };
-
-    const dup = DictEntry{
-        .type_sig = TypeSig {.in = 1, .out = 2},
-        .implementation = .{.op_code = OpCode.dup}
-    };
-};
-
-const std_library = [_]std.meta.Tuple(&.{ []const u8, DictEntry }) {
-    .{"+",      BuiltIns.add},
-    .{"-",      BuiltIns.sub},
-    .{"*",      BuiltIns.mul},
-    .{"/",      BuiltIns.div},
-    .{"dup",    BuiltIns.dup}
+const std_library = [_]std.meta.Tuple(&.{ []const u8, TypeSig, OpCode}) {
+    .{"+",      TypeSig.init(2, 1), OpCode.add},
+    .{"-",      TypeSig.init(2, 1), OpCode.sub},
+    .{"*",      TypeSig.init(2, 1), OpCode.mul},
+    .{"/",      TypeSig.init(2, 1), OpCode.div},
+    .{"dup",    TypeSig.init(1, 2), OpCode.dup}
 };
 
 const TypeSigErr = error { Empty, ArityMismatch };
@@ -276,22 +246,33 @@ const TypeSig = struct {
     }
 
     pub fn format(
-        value: @This(),
+        self: @This(),
         comptime _: []const u8,
         _: std.fmt.FormatOptions,
         writer: anytype
     ) !void {
-        try writer.print("{d} -> {d}", .{value.in, value.out});
+        // TODO: hardcoding num
+
+        var in_index: usize = 0;
+        while (in_index < self.in) : (in_index += 1) {
+            try writer.writeAll("num ");
+        }
+
+        try writer.writeAll("->");
+
+        var out_index: usize = 0;
+        while (out_index < self.out) : (out_index += 1) {
+            try writer.writeAll(" num");
+        }
     }
 
     pub fn compose(self: @This(), other: TypeSig) TypeSig {
         const max_depth_read = @maximum(self.in, other.in - self.out);
-        // -1 + 2 - 2 + 1
         const final_stack_pos = -self.in + self.out - other.in + other.out;
 
         return TypeSig {
             .in = max_depth_read,
-            .out = max_depth_read - final_stack_pos
+            .out = max_depth_read + final_stack_pos
         };
     }
 };
@@ -308,7 +289,11 @@ const Interpreter = struct {
         var dict = Dict.init(allocator);
 
         for (std_library) |sl| {
-            try dict.put(sl[0], sl[1]);
+            const entry = DictEntry {
+                .type_sig = sl[1],
+                .impl = .{.op_code = sl[2]}
+            };
+            try dict.put(sl[0], entry);
         }
 
         return Interpreter {
@@ -332,9 +317,10 @@ const Interpreter = struct {
     pub fn eval(self: *@This(), s: []const u8) ![]const u8 {
         if (s.len == 0) return s;
 
-        self.output_buffer.clearRetainingCapacity();
         self.entry_word_buffer.clear();
-
+        self.output_buffer.clearRetainingCapacity();
+        const writer = self.output_buffer.writer();
+        
         var tokens = std.mem.tokenize(u8, s, &std.ascii.spaces);
 
         var word_buffer: *WordBuffer = &self.entry_word_buffer;
@@ -350,12 +336,21 @@ const Interpreter = struct {
                 const addr = try self.vm.store(word_buffer);
                 const entry = DictEntry{
                     .type_sig = word_buffer.type_sig,
-                    .implementation = .{
-                        .address = addr    
-                    }
+                    .impl = .{.address = addr}
                 };
-                    
+                
+                // Add it to dictionary    
                 try self.dict.put(self.new_word_name, entry);
+
+                // Print type
+
+
+                try writer.print("{s} : {s}\n", .{
+                    self.new_word_name,
+                    self.new_word_buffer.type_sig
+                });
+
+                self.new_word_buffer.clear();
                 word_buffer = &self.entry_word_buffer;
             } else if (self.dict.get(token)) |entry| {
                 try word_buffer.writeEntry(entry);
@@ -366,10 +361,23 @@ const Interpreter = struct {
             }
         }
 
-        const entry_word = try self.entry_word_buffer.toEntryWord();
+        if (self.entry_word_buffer.code.items.len > 0) {
 
-        try self.vm.exec(&entry_word);
-        try self.vm.print(&self.output_buffer);
+            const entry_word = try self.entry_word_buffer.toEntryWord();
+
+            try self.vm.exec(&entry_word);
+            try self.vm.print(writer);
+
+            try writer.writeAll(" :");
+            
+            var i: usize = 0;        
+            while (i < self.entry_word_buffer.type_sig.out) : (i += 1) {
+                try writer.writeAll(" num");
+            }
+
+            try writer.writeAll("\n");
+        }
+
         // NOTE: assuming we print this to the screen immediately, as underlying
         // buffer will no longer be valid next time it's called
         return self.output_buffer.items;
@@ -382,114 +390,89 @@ fn test_eval(actual: []const u8, expected: []const u8) !void {
     return expectStrings(actual, try interpreter.eval(expected));
 }
 
-// test "infer type of constant" {
-//     var wb = try WordBuffer.init(std.testing.allocator);
-//     defer wb.deinit();
-
-//     try wb.writeOperand(42.0);
-//     try std.testing.expectEqual(TypeSig.init(0, 1), wb.type_sig);
-// }
-
-test "infer type of two constants" {
-    var wb = try WordBuffer.init(std.testing.allocator);
-    defer wb.deinit();
-
-    try wb.writeOperand(42.0);
-    try wb.writeOperand(39.0);
-
-    const actual: TypeSig= wb.type_sig;
-    const expected: TypeSig = TypeSig.init(0, 2);
-    try std.testing.expectEqual(expected, actual);
-
+test "infer type of constant" {
+    try test_eval("42 : num", "42");
 }
 
-// test "infer type of square" {
-//     var wb = try WordBuffer.init(std.testing.allocator);
-//     defer wb.deinit();
+test "infer type of two constants" {
+    try test_eval("42 39 : num num", "42 39");
+}
 
-//     try wb.writeEntry(BuiltIns.dup);
-//     try wb.writeEntry(BuiltIns.mul);
+test "infer type of square" {
+    try test_eval("sq : num -> num", ": sq dup * ;");
+}
+
+test "infer type of cube" {
+    try test_eval("cube : num -> num", ": cube dup dup * * ;");
+}
+
+test  "type of add one" {
+    try test_eval("add1 : num -> num", ": add1 1 + ;");
+}
+
+test "type of two constants" {
+    try test_eval("3 4 : num num", "3 4");
+}
+
+// test "make nested definitions with multiple calls to eval" {
+//     var interpreter = try Interpreter.init(std.testing.allocator);
+//     defer interpreter.deinit();
     
-//     try std.testing.expectEqual(TypeSig.init(1, 1), wb.type_sig);
-// }
-
-// test "infer type of cube" {
-//     var wb = try WordBuffer.init(std.testing.allocator);
-//     defer wb.deinit();
-
-//     try wb.writeEntry(BuiltIns.dup);
-//     try wb.writeEntry(BuiltIns.dup);
-//     try wb.writeEntry(BuiltIns.mul);
-//     try wb.writeEntry(BuiltIns.mul);
-    
-//     try std.testing.expectEqual(TypeSig {.in= 1, .out = 1}, wb.type_sig);
-// }
-
-// test "type of 3 4" {
-//     try std.testing.expectEqual(
-//         TypeSig.init(0, 2),
-//         TypeSig.init(0, 1).compose(TypeSig.init(0, 1))
-//     );
-// }
-
-// test  "type of 3 *" {
-//     try std.testing.expectEqual(
-//         TypeSig.init(1, 1),
-//         TypeSig.init(0, 1).compose(TypeSig.init(2, 1))
-//     );
+//     try in
+//     return expectStrings(actual, try interpreter.eval(expected));
 // }
 
 // SICP Tests
 
-// test "eval empty input" {
-//     try test_eval("", "");
-// }
+test "eval empty input" {
+    try test_eval("", "");
+}
 
-// test "primitive expression" {
-//     try test_eval("486", "486");
-// }
+test "primitive expression" {
+    try test_eval("486 : num", "486");
+}
 
-// test "add ints" {
-//     try test_eval("486", "137 349 +");
-// }
+test "add ints" {
+    try test_eval("486 : num", "137 349 +");
+}
 
-// test "subtract ints" {
-//     try test_eval("666", "1000 334 -");
-// }
+test "subtract ints" {
+    try test_eval("666 : num", "1000 334 -");
+}
 
-// test "divide ints" {
-//     try test_eval("2", "10 5 /");
-// }
+test "divide ints" {
+    try test_eval("2 : num", "10 5 /");
+}
 
-// test "add real to int" {
-//     try test_eval("12.7", "2.7 10 +");
-// }
+test "add real to int" {
+    try test_eval("12.7 : num", "2.7 10 +");
+}
 
-// test "add multiple ints" {
-//     try test_eval("75", "21 35 + 12 + 7 +");
-// }
+test "add multiple ints" {
+    try test_eval("75 : num", "21 35 + 12 + 7 +");
+}
 
-// test "multiply multiple ints" {
-//     try test_eval("1200", "25 4 * 12 *");
-// }
+test "multiply multiple ints" {
+    try test_eval("1200 : num", "25 4 * 12 *");
+}
 
-// test "nested combinations" {
-//     try test_eval("19", "3 5 * 10 6 - +");
-// }
+test "nested combinations" {
+    try test_eval("19 : num", "3 5 * 10 6 - +");
+}
 
-// test "relatively simple expressions" {
-//     try test_eval("57", "3 2 4 * 3 5 + + * 10 7 - 6 + +");
-// }
+test "relatively simple expressions" {
+    try test_eval("57 : num", "3 2 4 * 3 5 + + * 10 7 - 6 + +");
+}
 
-// test "naming a value" {
-//     const input = 
-//         \\ : size 2 ;
-//         \\ size
-//         \\ 5 size *
-//     ;
+test "naming a value" {
+    const input = 
+        \\ : size 2 ;
+        \\ size
+        \\ 5 size *
+    ;
 
-//     try test_eval("2 10", input);
-// }
+    try test_eval("2 10", input);
+}
 
 // test "further examples of defining a value" {
 //     const input =
@@ -533,7 +516,7 @@ pub fn main() !void {
         // Eval
         var output = try interpreter.eval(input.items);
         // Print
-        try stdout.print("{s}\n", .{output});
+        try stdout.print("{s}", .{output});
         // Loop
         input.clearRetainingCapacity();
     }
