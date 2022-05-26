@@ -269,7 +269,7 @@ const TypeSig = struct {
         const max_depth_read = @maximum(self.in, other.in - self.out);
         const final_stack_pos = -self.in + self.out - other.in + other.out;
 
-        return TypeSig {
+        return .{
             .in = max_depth_read,
             .out = max_depth_read + final_stack_pos
         };
@@ -303,7 +303,7 @@ const Interpreter = struct {
             .entry_word_buffer = try WordBuffer.init(allocator),
             .new_word_buffer = try WordBuffer.init(allocator),
             .new_word_name = "",
-            .allocator = allocator
+            .allocator = allocator,
         };
     }
 
@@ -379,7 +379,6 @@ const Interpreter = struct {
         }
 
         if (self.entry_word_buffer.code.items.len > 0) {
-
             const entry_word = try self.entry_word_buffer.toEntryWord();
 
             try self.vm.exec(&entry_word);
@@ -388,7 +387,7 @@ const Interpreter = struct {
             try writer.writeAll(" :");
             
             var i: usize = 0;        
-            while (i < self.entry_word_buffer.type_sig.out) : (i += 1) {
+            while (i < self.vm.ds.items.len) : (i += 1) {
                 try writer.writeAll(" num");
             }
 
@@ -418,18 +417,29 @@ fn test_multiline_eval(output: []const []const u8, input: []const []const u8, ) 
 
     var actual_buf = try arrayList([]const u8, allocator);
     defer actual_buf.deinit();
-
+    
     for (input) |s| {
-        try actual_buf.append(try interpreter.eval(s));
+        const eval_ouput = try interpreter.eval(s);
+        try actual_buf.append(try allocator.dupe(u8, eval_ouput));
     }
 
-    const expected = try std.mem.join(allocator, "\n", output);
-    const actual = try std.mem.join(allocator, "\n", actual_buf.items);
+    var expected_buf = try arrayList(u8, allocator);
 
-    defer allocator.free(expected);
+    for (output) |s| {
+        try expected_buf.writer().print("{s}\n", .{s});
+    }
+
+    defer expected_buf.deinit();
+
+    const actual = try std.mem.join(allocator, "", actual_buf.items);
+
+    defer for (actual_buf.items) |s| {
+        allocator.free(s);
+    };
+
     defer allocator.free(actual);
 
-    return std.testing.expectEqualStrings(expected, actual);
+    return std.testing.expectEqualStrings(expected_buf.items, actual);
 }
 
 test "infer type of constant" {
@@ -499,43 +509,58 @@ test "relatively simple expressions" {
 }
 
 test "naming a value" {
-    const actual = [_][] const u8{
+    const input = .{
         ": size 2 ;",
         "size",
         "5 size *"
     };
 
-    const expected = [_][] const u8 {
+    const output = .{
         "size : -> num",
         "2 : num",
-        "2 5 : num num"
+        "2 10 : num num"
     };
 
-    try test_multiline_eval(&expected, &actual);
+    try test_multiline_eval(&output, &input);
 }
 
-// test "further examples of defining a value" {
-//     const input =
-//         \\ : pi 3.14159 ;
-//         \\ : radius 10 ;
-//         \\ radius radius * pi *
-//         \\ : circumference 2 pi * radius * ;
-//         \\ circumference
-//     ;
+test "further examples of defining a value" {
+    const input = .{
+        ": pi 3.14159 ;",
+        ": radius 10 ;",
+        "radius radius * pi *",
+        ": circumference 2 pi * radius * ;",
+        "circumference"
+    };
 
-//     try test_eval("314.159 62.8318", input);
-// }
+    const output = .{
+        "pi : -> num",
+        "radius : -> num",
+        "314.159 : num",
+        "circumference : -> num",
+        "314.159 62.8318 : num num"
+    };
 
-// test "procedure definition" {
-//     const input =
-//         \\ : square dup * ;
-//         \\ 21 square
-//         \\ 2 5 + square
-//         \\ 3 square square
-//     ;
+    try test_multiline_eval(&output, &input);
+}
 
-//     try test_eval("441 49 81", input);
-// }
+test "procedure definition" {
+    const input = .{
+        ": square dup * ;",
+        "21 square",
+        "2 5 + square",
+        "3 square square"
+    };
+
+    const output = .{
+        "square : num -> num",
+        "441 : num",
+        "441 49 : num num",
+        "441 49 81 : num num num"
+    };
+
+    try test_multiline_eval(&output, &input);
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
