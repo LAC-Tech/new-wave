@@ -283,6 +283,7 @@ const Interpreter = struct {
     entry_word_buffer: WordBuffer,
     new_word_buffer: WordBuffer,
     new_word_name: []const u8,
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) !Interpreter {
         var dict = Dict.init(allocator);
@@ -292,7 +293,7 @@ const Interpreter = struct {
                 .type_sig = sl[1],
                 .impl = .{.op_code = sl[2]}
             };
-            try dict.put(sl[0], entry);
+            try dict.put(try allocator.dupe(u8, sl[0]), entry);
         }
 
         return Interpreter {
@@ -301,12 +302,19 @@ const Interpreter = struct {
             .output_buffer = try arrayList(u8, allocator),
             .entry_word_buffer = try WordBuffer.init(allocator),
             .new_word_buffer = try WordBuffer.init(allocator),
-            .new_word_name = ""
+            .new_word_name = "",
+            .allocator = allocator
         };
     }
 
     pub fn deinit(self: *@This()) void {
         self.vm.deinit();
+
+        var dict_it = self.dict.iterator();
+        while (dict_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+
         self.dict.deinit();
         self.output_buffer.deinit();
         self.entry_word_buffer.deinit();
@@ -338,11 +346,12 @@ const Interpreter = struct {
                     .impl = .{.address = addr}
                 };
                 
-                // Add it to dictionary    
-                try self.dict.put(self.new_word_name, entry);
+                // Add it to dictionary
+                const copied_name = try self.allocator.dupe(
+                    u8,
+                    self.new_word_name);
 
-                // Print type
-
+                try self.dict.put(copied_name, entry);
 
                 try writer.print("{s} : {s}\n", .{
                     self.new_word_name,
@@ -356,7 +365,16 @@ const Interpreter = struct {
             } else if (std.fmt.parseFloat(Operand, token)) |operand| {
                 try word_buffer.writeOperand(operand);
             } else |_| {
-                return "unknown token";
+                std.debug.print("available words: \n", .{});
+
+                var names = self.dict.keyIterator();
+
+                while (names.next()) |name| {
+                    std.debug.print("{s} ", .{name.*});                    
+                }
+
+                try writer.print("unknown token: {s}\n", .{token});
+                return self.output_buffer.items;
             }
         }
 
@@ -391,18 +409,27 @@ fn test_eval(expected: []const u8, actual: []const u8) !void {
 
 }
 
-fn test_multiline_eval(actual: []const []const u8, expected: []const []const u8) !void {
+fn test_multiline_eval(output: []const []const u8, input: []const []const u8, ) !void {
+    
     const allocator = std.testing.allocator;
 
     var interpreter = try Interpreter.init(allocator);
     defer interpreter.deinit();
 
-    
+    var actual_buf = try arrayList([]const u8, allocator);
+    defer actual_buf.deinit();
 
-    return std.testing.expectEqualStrings(
-        try std.mem.join(allocator, "", actual), 
-        try std.mem.join(allocator, "", expected));
+    for (input) |s| {
+        try actual_buf.append(try interpreter.eval(s));
+    }
 
+    const expected = try std.mem.join(allocator, "\n", output);
+    const actual = try std.mem.join(allocator, "\n", actual_buf.items);
+
+    defer allocator.free(expected);
+    defer allocator.free(actual);
+
+    return std.testing.expectEqualStrings(expected, actual);
 }
 
 test "infer type of constant" {
@@ -478,12 +505,13 @@ test "naming a value" {
         "5 size *"
     };
 
-    const expected = [_][] const u8{
+    const expected = [_][] const u8 {
         "size : -> num",
-        "2 10 : num num"
+        "2 : num",
+        "2 5 : num num"
     };
 
-    try test_multiline_eval(&actual, &expected);
+    try test_multiline_eval(&expected, &actual);
 }
 
 // test "further examples of defining a value" {
