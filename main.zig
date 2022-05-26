@@ -1,7 +1,8 @@
 //const mem = @import("mem");
 const std = @import("std");
 
-const Operand = f64;
+const Num = f64;
+const Operand = union {num: Num};
 const Address = usize;
 
 const OpCode = enum(u8) {
@@ -166,20 +167,20 @@ const VM = struct {
                 .ret => self.frame = self.rs.pop(),
                 .add => {
                     self.temp = self.ds.pop();
-                    self.top().* += self.temp;
+                    self.top().*.num += self.temp.num;
                 },
                 .sub => {
                     self.temp = self.ds.pop();
-                    self.top().* -= self.temp;
+                    self.top().*.num -= self.temp.num;
                 },
                 .mul => {
                     self.temp = self.ds.pop();
-                    self.top().* *= self.temp;
+                    self.top().*.num *= self.temp.num;
                 },
                 .div => {
                     self.temp = self.ds.pop();
                     var tos = self.top();
-                    tos.* = @divExact(tos.*, self.temp);
+                    tos.*.num = @divExact(tos.*.num, self.temp.num);
                 },
                 .dup => try self.ds.append(self.top().*),
                 .drop => _ = self.ds.pop()
@@ -200,11 +201,11 @@ const VM = struct {
     pub fn print(self: *@This(), writer: anytype) !void {
         if (self.ds.items.len == 0) return;
 
-        try writer.print("{d}", .{self.ds.items[0]});
+        try writer.print("{d}", .{self.ds.items[0].num});
 
         if (self.ds.items.len > 1) {
             for (self.ds.items[1..]) |d| {
-                try writer.print(" {d}", .{d});
+                try writer.print(" {d}", .{d.num});
             }
         }
     }
@@ -362,8 +363,8 @@ const Interpreter = struct {
                 word_buffer = &self.entry_word_buffer;
             } else if (self.dict.get(token)) |entry| {
                 try word_buffer.writeEntry(entry);
-            } else if (std.fmt.parseFloat(Operand, token)) |operand| {
-                try word_buffer.writeOperand(operand);
+            } else if (std.fmt.parseFloat(Num, token)) |num| {
+                try word_buffer.writeOperand(.{.num = num});
             } else |_| {
                 std.debug.print("available words: \n", .{});
 
