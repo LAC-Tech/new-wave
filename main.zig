@@ -1,39 +1,20 @@
-//const mem = @import("mem");
 const std = @import("std");
-
-const Num = f64;
-const Operand = union {num: Num};
-const Address = usize;
-
-const OpCode = enum(u8) {
-    // Internal
-    end, push, call, ret,
-    // Math
-    add, sub, mul, div,
-    // Stack manipulation
-    dup, drop
-};
+const isa = @import("./isa.zig");
 
 fn arrayList(comptime T: type, allocator: std.mem.Allocator) !std.ArrayList(T) {
     return std.ArrayList(T).initCapacity(allocator, 0xFF);
 }
 
-const Word = struct {
-    operands: []const Operand,
-    addresses: []const Address,
-    code: []const u8
-};
-
 const WordBuffer = struct {
-    operands: std.ArrayList(Operand),
-    addresses: std.ArrayList(Address),
+    operands: std.ArrayList(isa.Operand),
+    addresses: std.ArrayList(isa.Address),
     code: std.ArrayList(u8),
     type_sig: TypeSig,
 
     pub fn init(allocator: std.mem.Allocator) !WordBuffer {
         return WordBuffer {
-            .operands = try arrayList(Operand, allocator),
-            .addresses = try arrayList(Address, allocator),
+            .operands = try arrayList(isa.Operand, allocator),
+            .addresses = try arrayList(isa.Address, allocator),
             .code = try arrayList(u8, allocator),
             .type_sig = TypeSig.init(0, 0)
         };
@@ -45,18 +26,18 @@ const WordBuffer = struct {
         self.code.deinit();
     }
 
-    pub fn toEntryWord(self: *@This()) !Word {
-        try self.code.append(@enumToInt(OpCode.end));
-        return Word {
+    pub fn toEntryWord(self: *@This()) !isa.Word {
+        try self.code.append(@enumToInt(isa.OpCode.end));
+        return isa.Word {
             .operands = self.operands.items,
             .addresses = self.addresses.items,
             .code = self.code.items,
         };
     }
 
-    pub fn toUserWord(self: *@This()) !Word {
-        try self.code.append(@enumToInt(OpCode.ret));
-        return Word {
+    pub fn toUserWord(self: *@This()) !isa.Word {
+        try self.code.append(@enumToInt(isa.OpCode.ret));
+        return isa.Word {
             .operands = self.operands.toOwnedSlice(),
             .addresses = self.addresses.toOwnedSlice(),
             .code = self.code.toOwnedSlice(),
@@ -72,7 +53,7 @@ const WordBuffer = struct {
             },
             .address => {
                 try self.code.appendSlice(&[_]u8{
-                    @enumToInt(OpCode.call),
+                    @enumToInt(isa.OpCode.call),
                     @intCast(u8, entry.impl.address)
                 });
                 try self.addresses.append(entry.impl.address);
@@ -80,11 +61,11 @@ const WordBuffer = struct {
         }
     }
 
-    pub fn writeOperand(self: *@This(), operand: Operand) !void {
+    pub fn writeOperand(self: *@This(), operand: isa.Operand) !void {
         self.type_sig = self.type_sig.compose(TypeSig.init(0, 1));
 
         try self.code.appendSlice(&[_]u8{
-            @enumToInt(OpCode.push),
+            @enumToInt(isa.OpCode.push),
             @intCast(u8, self.operands.items.len)
         });
         try self.operands.append(operand);
@@ -98,119 +79,6 @@ const WordBuffer = struct {
     }
 };
 
-const Frame = struct {
-    pc: usize,
-    word: *const Word,
-
-    pub fn code(self: @This()) u8 {
-        return self.word.code[self.pc];
-    }
-};
-
-const VM = struct {
-    allocator: std.mem.Allocator,
-    ds: std.ArrayList(Operand),
-    temp: Operand,
-    rs: std.ArrayList(Frame),
-    frame: Frame,
-    memory: std.ArrayList(Word),
-
-    pub fn init(allocator: std.mem.Allocator) !VM {
-        return VM {
-            .allocator = allocator,
-            .ds = try arrayList(Operand, allocator),
-            .temp = undefined,
-            .rs = try arrayList(Frame, allocator),
-            .frame = undefined,
-            .memory = try arrayList(Word, allocator)
-        };
-    }
-
-    pub fn deinit(self: @This()) void {
-        self.ds.deinit();
-        self.rs.deinit();
-            
-        for (self.memory.items) |word| {
-            self.allocator.free(word.code);
-            self.allocator.free(word.addresses);
-            self.allocator.free(word.operands);
-        }
-
-        self.memory.deinit();
-    }
-
-    pub fn exec(self: *@This(), entry_word: *const Word) !void {
-        self.frame = Frame {.pc = 0, .word = entry_word};
-
-        while (true) : (self.frame.pc +%= 1) {
-            var op_code = @intToEnum(OpCode, self.frame.code());
-            
-            switch (op_code) {
-                .end => break,
-                .push => {
-                    self.frame.pc += 1;
-                    const index = self.frame.code();
-                    self.temp = self.frame.word.operands[index];
-                    try self.ds.append(self.temp);
-                },
-                .call => {
-                    self.frame.pc += 1;
-                    try self.rs.append(self.frame);
-
-                    const index = self.frame.code();
-
-                    self.frame = Frame {
-                        .word = &self.memory.items[index],
-                        .pc = std.math.maxInt(usize)
-                    };
-                },
-                .ret => self.frame = self.rs.pop(),
-                .add => {
-                    self.temp = self.ds.pop();
-                    self.top().*.num += self.temp.num;
-                },
-                .sub => {
-                    self.temp = self.ds.pop();
-                    self.top().*.num -= self.temp.num;
-                },
-                .mul => {
-                    self.temp = self.ds.pop();
-                    self.top().*.num *= self.temp.num;
-                },
-                .div => {
-                    self.temp = self.ds.pop();
-                    var tos = self.top();
-                    tos.*.num = @divExact(tos.*.num, self.temp.num);
-                },
-                .dup => try self.ds.append(self.top().*),
-                .drop => _ = self.ds.pop()
-            }
-        }
-    }
-
-    pub fn store(self: *@This(), word_buffer: *WordBuffer) !Address {
-        const address = self.memory.items.len;
-        try self.memory.append(try word_buffer.toUserWord());
-        return address;
-    }
-
-    fn top(self: *@This()) *Operand {
-        return &self.ds.items[self.ds.items.len-1];
-    }
-
-    pub fn print(self: *@This(), writer: anytype) !void {
-        if (self.ds.items.len == 0) return;
-
-        try writer.print("{d}", .{self.ds.items[0].num});
-
-        if (self.ds.items.len > 1) {
-            for (self.ds.items[1..]) |d| {
-                try writer.print(" {d}", .{d.num});
-            }
-        }
-    }
-};
-
 const DictEntryTag = enum {
     op_code,
     address,
@@ -219,14 +87,14 @@ const DictEntryTag = enum {
 const DictEntry = struct {
     type_sig: TypeSig,
     impl: union(DictEntryTag) {
-        op_code: OpCode,
-        address: Address
+        op_code: isa.OpCode,
+        address: isa.Address
     }
 };
 
 const Dict = std.StringHashMap(DictEntry);
 
-const std_library = [_]std.meta.Tuple(&.{ []const u8, TypeSig, OpCode}) {
+const std_library = [_]std.meta.Tuple(&.{ []const u8, TypeSig, isa.OpCode}) {
     .{"+",      TypeSig.init(2, 1), .add},
     .{"-",      TypeSig.init(2, 1), .sub},
     .{"*",      TypeSig.init(2, 1), .mul},
@@ -278,7 +146,7 @@ const TypeSig = struct {
 };
 
 const Interpreter = struct {
-    vm: VM,
+    vm: isa.VM,
     dict: Dict,
     output_buffer: std.ArrayList(u8),
     entry_word_buffer: WordBuffer,
@@ -298,7 +166,7 @@ const Interpreter = struct {
         }
 
         return Interpreter {
-            .vm = try VM.init(allocator),
+            .vm = try isa.VM.init(allocator),
             .dict = dict,
             .output_buffer = try arrayList(u8, allocator),
             .entry_word_buffer = try WordBuffer.init(allocator),
@@ -341,7 +209,7 @@ const Interpreter = struct {
                     self.new_word_name = name;
                 }
             } else if (std.mem.eql(u8, token, ";")) {
-                const addr = try self.vm.store(word_buffer);
+                const addr = try self.vm.store(try word_buffer.toUserWord());
                 const entry = DictEntry{
                     .type_sig = word_buffer.type_sig,
                     .impl = .{.address = addr}
@@ -363,7 +231,7 @@ const Interpreter = struct {
                 word_buffer = &self.entry_word_buffer;
             } else if (self.dict.get(token)) |entry| {
                 try word_buffer.writeEntry(entry);
-            } else if (std.fmt.parseFloat(Num, token)) |num| {
+            } else if (std.fmt.parseFloat(isa.Num, token)) |num| {
                 try word_buffer.writeOperand(.{.num = num});
             } else |_| {
                 std.debug.print("available words: \n", .{});
