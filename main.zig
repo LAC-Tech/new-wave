@@ -408,8 +408,10 @@ fn test_eval(expected: []const u8, actual: []const u8) !void {
 
 }
 
-fn test_multiline_eval(output: []const []const u8, input: []const []const u8, ) !void {
-    
+fn test_multiline_eval(
+    output: []const []const u8,
+    input: []const []const u8
+) !void {
     const allocator = std.testing.allocator;
 
     var interpreter = try Interpreter.init(allocator);
@@ -573,6 +575,8 @@ pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
 
     var input: std.ArrayList(u8) = try arrayList(u8, allocator);
+
+    try stdout.print("New Wave\n", .{});
 
     while (true) {
         try stdout.print("> ", .{});
