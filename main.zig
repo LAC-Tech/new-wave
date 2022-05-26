@@ -7,12 +7,10 @@ const Address = usize;
 const OpCode = enum(u8) {
     // Internal
     end, push, call, ret,
-
     // Math
     add, sub, mul, div,
-
     // Stack manipulation
-    dup,
+    dup, drop
 };
 
 fn arrayList(comptime T: type, allocator: std.mem.Allocator) !std.ArrayList(T) {
@@ -183,7 +181,8 @@ const VM = struct {
                     var tos = self.top();
                     tos.* = @divExact(tos.*, self.temp);
                 },
-                .dup => try self.ds.append(self.top().*)
+                .dup => try self.ds.append(self.top().*),
+                .drop => _ = self.ds.pop()
             }
         }
     }
@@ -227,11 +226,12 @@ const DictEntry = struct {
 const Dict = std.StringHashMap(DictEntry);
 
 const std_library = [_]std.meta.Tuple(&.{ []const u8, TypeSig, OpCode}) {
-    .{"+",      TypeSig.init(2, 1), OpCode.add},
-    .{"-",      TypeSig.init(2, 1), OpCode.sub},
-    .{"*",      TypeSig.init(2, 1), OpCode.mul},
-    .{"/",      TypeSig.init(2, 1), OpCode.div},
-    .{"dup",    TypeSig.init(1, 2), OpCode.dup}
+    .{"+",      TypeSig.init(2, 1), .add},
+    .{"-",      TypeSig.init(2, 1), .sub},
+    .{"*",      TypeSig.init(2, 1), .mul},
+    .{"/",      TypeSig.init(2, 1), .div},
+    .{"dup",    TypeSig.init(1, 2), .dup},
+    .{"drop",   TypeSig.init(1, 0), .drop}
 };
 
 const TypeSigErr = error { Empty, ArityMismatch };
@@ -379,6 +379,12 @@ const Interpreter = struct {
         }
 
         if (self.entry_word_buffer.code.items.len > 0) {
+            const stack_len = self.vm.ds.items.len;
+
+            if (self.entry_word_buffer.type_sig.in > stack_len) {
+                return "type err\n";
+            }
+
             const entry_word = try self.entry_word_buffer.toEntryWord();
 
             try self.vm.exec(&entry_word);
@@ -466,6 +472,10 @@ test  "type of add one" {
 
 test "type of two constants" {
     try test_eval("3 4 : num num\n", "3 4");
+}
+
+test "type error when not enough items on stack" {
+    try test_eval("type err\n", "1 +");
 }
 
 // SICP Tests
