@@ -52,21 +52,8 @@ pub const VM = struct {
         };
     }
 
-    pub fn deinit(self: @This()) void {
-        self.ds.deinit();
-        self.rs.deinit();
-            
-        for (self.memory.items) |word| {
-            self.allocator.free(word.code);
-            self.allocator.free(word.addresses);
-            self.allocator.free(word.operands);
-        }
-
-        self.memory.deinit();
-    }
-
     pub fn exec(self: *@This(), entry_word: *const Word) !void {
-        self.frame = Frame {.pc = 0, .word = entry_word};
+        self.frame = .{.pc = 0, .word = entry_word};
 
         while (true) : (self.frame.pc +%= 1) {
             var op_code = @intToEnum(OpCode, self.frame.code());
@@ -85,7 +72,7 @@ pub const VM = struct {
 
                     const index = self.frame.code();
 
-                    self.frame = Frame {
+                    self.frame = .{
                         .word = &self.memory.items[index],
                         .pc = std.math.maxInt(usize)
                     };

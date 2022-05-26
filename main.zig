@@ -20,12 +20,6 @@ const WordBuffer = struct {
         };
     }
 
-    pub fn deinit(self: @This()) void {
-        self.operands.deinit();
-        self.addresses.deinit();
-        self.code.deinit();
-    }
-
     pub fn toEntryWord(self: *@This()) !isa.Word {
         try self.code.append(@enumToInt(isa.OpCode.end));
         return isa.Word {
@@ -110,7 +104,7 @@ const TypeSig = struct {
     out: i8,
 
     pub fn init(in: i8, out: i8) TypeSig {
-        return TypeSig {.in = in, .out = out};
+        return .{.in = in, .out = out};
     }
 
     pub fn format(
@@ -176,19 +170,19 @@ const Interpreter = struct {
         };
     }
 
-    pub fn deinit(self: *@This()) void {
-        self.vm.deinit();
+    // pub fn deinit(self: *@This()) void {
+    //     self.vm.deinit();
 
-        var dict_it = self.dict.iterator();
-        while (dict_it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
+    //     var dict_it = self.dict.iterator();
+    //     while (dict_it.next()) |entry| {
+    //         self.allocator.free(entry.key_ptr.*);
+    //     }
 
-        self.dict.deinit();
-        self.output_buffer.deinit();
-        self.entry_word_buffer.deinit();
-        self.new_word_buffer.deinit();
-    }
+    //     self.dict.deinit();
+    //     self.output_buffer.deinit();
+    //     self.entry_word_buffer.deinit();
+    //     self.new_word_buffer.deinit();
+    // }
 
     pub fn eval(self: *@This(), s: []const u8) ![]const u8 {
         if (s.len == 0) return s;
@@ -209,18 +203,15 @@ const Interpreter = struct {
                     self.new_word_name = name;
                 }
             } else if (std.mem.eql(u8, token, ";")) {
+                const copied_name = 
+                    try self.allocator.dupe(u8, self.new_word_name);
+
                 const addr = try self.vm.store(try word_buffer.toUserWord());
-                const entry = DictEntry{
+
+                try self.dict.put(copied_name, .{
                     .type_sig = word_buffer.type_sig,
                     .impl = .{.address = addr}
-                };
-                
-                // Add it to dictionary
-                const copied_name = try self.allocator.dupe(
-                    u8,
-                    self.new_word_name);
-
-                try self.dict.put(copied_name, entry);
+                });
 
                 try writer.print("{s} : {s}\n", .{
                     self.new_word_name,
@@ -276,8 +267,12 @@ const Interpreter = struct {
 };
 
 fn test_eval(expected: []const u8, actual: []const u8) !void {
-    var interpreter = try Interpreter.init(std.testing.allocator);
-    defer interpreter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var allocator = arena.allocator();
+    var interpreter = try Interpreter.init(allocator);
+    
     return std.testing.expectEqualStrings(
         expected, try interpreter.eval(actual));
 
@@ -287,34 +282,25 @@ fn test_multiline_eval(
     output: []const []const u8,
     input: []const []const u8
 ) !void {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
 
+    var allocator = arena.allocator();
     var interpreter = try Interpreter.init(allocator);
-    defer interpreter.deinit();
-
     var actual_buf = try arrayList([]const u8, allocator);
-    defer actual_buf.deinit();
+    
+    var expected_buf = try arrayList(u8, allocator);
     
     for (input) |s| {
         const eval_ouput = try interpreter.eval(s);
         try actual_buf.append(try allocator.dupe(u8, eval_ouput));
     }
 
-    var expected_buf = try arrayList(u8, allocator);
-
     for (output) |s| {
         try expected_buf.writer().print("{s}\n", .{s});
     }
 
-    defer expected_buf.deinit();
-
     const actual = try std.mem.join(allocator, "", actual_buf.items);
-
-    defer for (actual_buf.items) |s| {
-        allocator.free(s);
-    };
-
-    defer allocator.free(actual);
 
     return std.testing.expectEqualStrings(expected_buf.items, actual);
 }
@@ -445,10 +431,12 @@ test "procedure definition" {
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    var allocator = arena.allocator();
 
     var interpreter = try Interpreter.init(allocator);
-    defer interpreter.deinit();
 
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
