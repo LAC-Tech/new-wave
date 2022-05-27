@@ -6,16 +6,19 @@ fn arrayList(comptime T: type, allocator: std.mem.Allocator) !std.ArrayList(T) {
 
 pub const OpCode = enum(u8) {
     // Internal
-    end, push, call_n, call_q, ret,
+    end, push, call, ret,
     // Math
     add, sub, mul, div,
     // Stack manipulation
-    dup, drop
+    dup, drop,
+    // Combinators
+    bi_at,
 };
 
 pub const Num = f64;
 pub const Operand = union {
-    num: Num
+    num: Num,
+    quote: u8,
 };
 
 pub const Address = usize;
@@ -38,7 +41,9 @@ const Frame = struct {
 
 pub const VM = struct {
     allocator: std.mem.Allocator,
-    temp: Operand,
+    temp_a: Operand,
+    temp_b: Operand,
+    temp_c: Operand,
     ds: std.ArrayList(Operand),
     rs: std.ArrayList(Frame),
     frame: Frame,
@@ -47,7 +52,9 @@ pub const VM = struct {
     pub fn init(allocator: std.mem.Allocator) !VM {
         return VM {
             .allocator = allocator,
-            .temp = undefined,
+            .temp_a = undefined,
+            .temp_b = undefined,
+            .temp_c = undefined,
             .ds = try arrayList(Operand, allocator),
             .rs = try arrayList(Frame, allocator),
             .frame = undefined,
@@ -66,10 +73,10 @@ pub const VM = struct {
                 .push => {
                     self.frame.pc += 1;
                     const index = self.frame.index();
-                    self.temp = self.frame.word.operands[index];
-                    try self.ds.append(self.temp);
+                    self.temp_a = self.frame.word.operands[index];
+                    try self.ds.append(self.temp_a);
                 },
-                .call_n => {
+                .call => {
                     self.frame.pc += 1;
                     try self.rs.append(self.frame);
 
@@ -80,37 +87,37 @@ pub const VM = struct {
                         .pc = std.math.maxInt(usize)
                     };
                 },
-                .call_q => {
-                    self.frame.pc += 1;
-                    try self.rs.append(self.frame);
-
-                    const index: u8 = self.frame.index();
-
-                    self.frame = .{
-                        .word = &self.frame.word.quotes[index],
-                        .pc = std.math.maxInt(usize)
-                    };
-                },
                 .ret => self.frame = self.rs.pop(),
                 .add => {
-                    self.temp = self.ds.pop();
-                    self.top().*.num += self.temp.num;
+                    self.temp_a = self.ds.pop();
+                    self.top().*.num += self.temp_a.num;
                 },
                 .sub => {
-                    self.temp = self.ds.pop();
-                    self.top().*.num -= self.temp.num;
+                    self.temp_a = self.ds.pop();
+                    self.top().*.num -= self.temp_a.num;
                 },
                 .mul => {
-                    self.temp = self.ds.pop();
-                    self.top().*.num *= self.temp.num;
+                    self.temp_a = self.ds.pop();
+                    self.top().*.num *= self.temp_a.num;
                 },
                 .div => {
-                    self.temp = self.ds.pop();
+                    self.temp_a = self.ds.pop();
                     var tos = self.top();
-                    tos.*.num = @divExact(tos.*.num, self.temp.num);
+                    tos.*.num = @divExact(tos.*.num, self.temp_a.num);
                 },
                 .dup => try self.ds.append(self.top().*),
-                .drop => _ = self.ds.pop()
+                .drop => _ = self.ds.pop(),
+                // 1 2 [ square ] bi@ + 
+                .bi_at => {
+                    self.temp_a = self.ds.pop();
+
+                    try self.rs.append(self.frame);
+
+                    self.frame = .{
+                        .word = &self.frame.word.quotes[self.temp_a.quote],
+                        .pc = std.math.maxInt(usize)
+                    };
+                }
             }
         }
     }

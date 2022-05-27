@@ -18,7 +18,7 @@ const WordBuffer = struct {
             .operands = try arrayList(isa.Operand, allocator),
             .addresses = try arrayList(isa.Address, allocator),
             .code = try arrayList(u8, allocator),
-            .type_sig = TypeSig.init(0, 0)
+            .type_sig = TypeSig.static(0, 0)
         };
     }
 
@@ -51,7 +51,7 @@ const WordBuffer = struct {
             },
             .address => {
                 try self.code.appendSlice(&[_]u8{
-                    @enumToInt(isa.OpCode.call_n),
+                    @enumToInt(isa.OpCode.call),
                     @intCast(u8, entry.impl.address)
                 });
                 try self.addresses.append(entry.impl.address);
@@ -60,7 +60,7 @@ const WordBuffer = struct {
     }
 
     pub fn writeOperand(self: *@This(), operand: isa.Operand) !void {
-        self.type_sig = self.type_sig.compose(TypeSig.init(0, 1));
+        self.type_sig = self.type_sig.compose(TypeSig.static(0, 1));
 
         try self.code.appendSlice(&[_]u8{
             @enumToInt(isa.OpCode.push),
@@ -73,7 +73,7 @@ const WordBuffer = struct {
         self.operands.clearRetainingCapacity();
         self.addresses.clearRetainingCapacity();
         self.code.clearRetainingCapacity();
-        self.type_sig = TypeSig.init(0, 0);
+        self.type_sig = TypeSig.static(0, 0);
     }
 };
 
@@ -92,22 +92,22 @@ const DictEntry = struct {
 
 const Dict = std.StringHashMap(DictEntry);
 
+// Some of these are dynamically typed for now.
 const std_library = [_]std.meta.Tuple(&.{ []const u8, TypeSig, isa.OpCode}) {
-    .{"+",      TypeSig.init(2, 1), .add},
-    .{"-",      TypeSig.init(2, 1), .sub},
-    .{"*",      TypeSig.init(2, 1), .mul},
-    .{"/",      TypeSig.init(2, 1), .div},
-    .{"dup",    TypeSig.init(1, 2), .dup},
-    .{"drop",   TypeSig.init(1, 0), .drop}
+    .{"+",      TypeSig.static(2, 1),   .add},
+    .{"-",      TypeSig.static(2, 1),   .sub},
+    .{"*",      TypeSig.static(2, 1),   .mul},
+    .{"/",      TypeSig.static(2, 1),   .div},
+    .{"dup",    TypeSig.static(1, 2),   .dup},
+    .{"drop",   TypeSig.static(1, 0),   .drop},
+    .{"bi@",    TypeSig.static(3, 2),   .bi_at},
 };
-
-const TypeSigErr = error { Empty, ArityMismatch };
 
 const TypeSig = struct {
     in: i8,
     out: i8,
 
-    pub fn init(in: i8, out: i8) TypeSig {
+    pub fn static(in: i8, out: i8) TypeSig {
         return .{.in = in, .out = out};
     }
 
@@ -150,6 +150,7 @@ const Interpreter = struct {
     entry_word_buffer: WordBuffer,
     new_word_buffer: WordBuffer,
     new_word_name: []const u8,
+    quote_buffer: WordBuffer,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) !Interpreter {
@@ -170,26 +171,14 @@ const Interpreter = struct {
             .entry_word_buffer = try WordBuffer.init(allocator),
             .new_word_buffer = try WordBuffer.init(allocator),
             .new_word_name = "",
+            .quote_buffer = try WordBuffer.init(allocator),
             .allocator = allocator,
         };
     }
 
-    // pub fn deinit(self: *@This()) void {
-    //     self.vm.deinit();
-
-    //     var dict_it = self.dict.iterator();
-    //     while (dict_it.next()) |entry| {
-    //         self.allocator.free(entry.key_ptr.*);
-    //     }
-
-    //     self.dict.deinit();
-    //     self.output_buffer.deinit();
-    //     self.entry_word_buffer.deinit();
-    //     self.new_word_buffer.deinit();
-    // }
-
     pub fn eval(self: *@This(), s: []const u8) ![]const u8 {
         if (s.len == 0) return s;
+
 
         self.entry_word_buffer.clear();
         self.output_buffer.clearRetainingCapacity();
@@ -198,9 +187,11 @@ const Interpreter = struct {
         var tokens = std.mem.tokenize(u8, s, &std.ascii.spaces);
 
         var word_buffer: *WordBuffer = &self.entry_word_buffer;
+        var prev_word_buffer: *WordBuffer = undefined;
 
         while (tokens.next()) |token| {
             if (std.mem.eql(u8, token, ":")) {
+                prev_word_buffer = word_buffer;
                 word_buffer = &self.new_word_buffer;
 
                 if (tokens.next()) |name| {
@@ -223,7 +214,18 @@ const Interpreter = struct {
                 });
 
                 self.new_word_buffer.clear();
-                word_buffer = &self.entry_word_buffer;
+                word_buffer = prev_word_buffer;
+            } else if (std.mem.eql(u8, token, "[")) {
+                prev_word_buffer = word_buffer;
+                word_buffer = &self.quote_buffer;
+            } else if (std.mem.eql(u8, token, "]")) {
+                const addr = @intCast(u8, prev_word_buffer.quotes.items.len);
+
+                try prev_word_buffer.quotes.append(
+                    try word_buffer.toUserWord());
+
+                try word_buffer.writeOperand(.{.quote = addr});
+                word_buffer = prev_word_buffer;
             } else if (self.dict.get(token)) |entry| {
                 try word_buffer.writeEntry(entry);
             } else if (std.fmt.parseFloat(isa.Num, token)) |num| {
@@ -432,6 +434,25 @@ test "procedure definition" {
 
     try test_multiline_eval(&output, &input);
 }
+
+test "sum of squares" {
+    const input = .{
+        ": square dup * ;",
+        ": sum-of-square [ square ] bi@ + ;",
+        "3 4 sum-of-square"
+    };
+
+    const output = .{
+        "square : num -> num",
+        "sum-of-square : num num -> num",
+        "25 : num"
+    };
+
+    try test_multiline_eval(&output, &input);
+}
+// [ square ] bi@ +
+// (define (sum-of-squares x y)
+// (+ (square x) (square y)))
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
