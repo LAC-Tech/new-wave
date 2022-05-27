@@ -6,7 +6,7 @@ fn arrayList(comptime T: type, allocator: std.mem.Allocator) !std.ArrayList(T) {
 
 pub const OpCode = enum(u8) {
     // Internal
-    end, push, call, ret,
+    end, push, call_n, call_q, ret,
     // Math
     add, sub, mul, div,
     // Stack manipulation
@@ -14,11 +14,14 @@ pub const OpCode = enum(u8) {
 };
 
 pub const Num = f64;
-pub const Operand = union {num: Num};
+pub const Operand = union {
+    num: Num
+};
 
 pub const Address = usize;
 
 pub const Word = struct {
+    quotes: []const Word,
     operands: []const Operand,
     addresses: []const Address,
     code: []const u8
@@ -28,7 +31,7 @@ const Frame = struct {
     pc: usize,
     word: *const Word,
 
-    pub fn code(self: @This()) u8 {
+    pub fn index(self: @This()) u8 {
         return self.word.code[self.pc];
     }
 };
@@ -56,24 +59,35 @@ pub const VM = struct {
         self.frame = .{.pc = 0, .word = entry_word};
 
         while (true) : (self.frame.pc +%= 1) {
-            var op_code = @intToEnum(OpCode, self.frame.code());
+            var op_code = @intToEnum(OpCode, self.frame.index());
             
             switch (op_code) {
                 .end => break,
                 .push => {
                     self.frame.pc += 1;
-                    const index = self.frame.code();
+                    const index = self.frame.index();
                     self.temp = self.frame.word.operands[index];
                     try self.ds.append(self.temp);
                 },
-                .call => {
+                .call_n => {
                     self.frame.pc += 1;
                     try self.rs.append(self.frame);
 
-                    const index = self.frame.code();
+                    const index: u8 = self.frame.index();
 
                     self.frame = .{
                         .word = &self.memory.items[index],
+                        .pc = std.math.maxInt(usize)
+                    };
+                },
+                .call_q => {
+                    self.frame.pc += 1;
+                    try self.rs.append(self.frame);
+
+                    const index: u8 = self.frame.index();
+
+                    self.frame = .{
+                        .word = &self.frame.word.quotes[index],
                         .pc = std.math.maxInt(usize)
                     };
                 },

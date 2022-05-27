@@ -6,6 +6,7 @@ fn arrayList(comptime T: type, allocator: std.mem.Allocator) !std.ArrayList(T) {
 }
 
 const WordBuffer = struct {
+    quotes: std.ArrayList(isa.Word),
     operands: std.ArrayList(isa.Operand),
     addresses: std.ArrayList(isa.Address),
     code: std.ArrayList(u8),
@@ -13,6 +14,7 @@ const WordBuffer = struct {
 
     pub fn init(allocator: std.mem.Allocator) !WordBuffer {
         return WordBuffer {
+            .quotes = try arrayList(isa.Word, allocator),
             .operands = try arrayList(isa.Operand, allocator),
             .addresses = try arrayList(isa.Address, allocator),
             .code = try arrayList(u8, allocator),
@@ -23,6 +25,7 @@ const WordBuffer = struct {
     pub fn toEntryWord(self: *@This()) !isa.Word {
         try self.code.append(@enumToInt(isa.OpCode.end));
         return isa.Word {
+            .quotes = self.quotes.items,
             .operands = self.operands.items,
             .addresses = self.addresses.items,
             .code = self.code.items,
@@ -32,6 +35,7 @@ const WordBuffer = struct {
     pub fn toUserWord(self: *@This()) !isa.Word {
         try self.code.append(@enumToInt(isa.OpCode.ret));
         return isa.Word {
+            .quotes = self.quotes.toOwnedSlice(),
             .operands = self.operands.toOwnedSlice(),
             .addresses = self.addresses.toOwnedSlice(),
             .code = self.code.toOwnedSlice(),
@@ -47,7 +51,7 @@ const WordBuffer = struct {
             },
             .address => {
                 try self.code.appendSlice(&[_]u8{
-                    @enumToInt(isa.OpCode.call),
+                    @enumToInt(isa.OpCode.call_n),
                     @intCast(u8, entry.impl.address)
                 });
                 try self.addresses.append(entry.impl.address);
