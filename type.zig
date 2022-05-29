@@ -48,4 +48,15 @@ pub const Sig = struct {
 
 const Elem = enum { num };
 
-const NewSig = struct { in: []Elem, out: []Elem };
+const NewSig = struct {
+    in: []const Elem,
+    out: []const Elem,
+
+    pub fn init(in: []const Elem, out: []const Elem) NewSig {
+        return NewSig{ .in = in, .out = out };
+    }
+};
+
+test "initialize new sig" {
+    _ = NewSig.init(&.{.num}, &.{.num});
+}
