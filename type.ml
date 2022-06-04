@@ -1,43 +1,39 @@
 open Base
 
-type elem = Generic | Num | Symbol | Quote of (elem list -> elem list)
-
-let elem_match l r = match (l, r) with
-	| (Generic, _) -> true
-	| (_, Generic) -> true
-	| (A, B) -> false
-
-exception TypeErr of string
-
 type type_sig = 
 	| Push of elem
 	| Drop
 	| Dup
 	| BinOp of (elem list * elem list)
-	| Quote_ of type_sig
 	| Apply
+and elem = Generic | Num | Symbol | Quote of type_sig
 
-let rec type_apply ts stack = match (ts, stack) with
-	| (Push t, _) -> t::stack
+let elem_match l r = match (l, r) with
+	| (Generic, _) -> true
+	| (_, Generic) -> true
+	| (a, b) -> false
+
+
+
+let rec type_apply stack ts = match (ts, stack) with
+	| (Push t, _) -> Ok (t::stack)
 	
-	| (Drop, t::s) -> s
-	| (Drop, _) -> raise (TypeErr "underflow")
+	| (Drop, t::s) -> Ok s
+	| (Drop, _) -> Error "underflow"
 	
-	| (Dup, t::s) -> t::t::s
-	| (Dup, _) -> raise (TypeErr "underflow")
+	| (Dup, t::s) -> Ok (t::t::s)
+	| (Dup, _) -> Error "underflow"
 	
-	| (BinOp (inputs, outputs), a::b::s) -> (
-		if (List.equal elem_match [a; b] inputs) then 
-			outputs @ s
+	| (BinOp (inputs, outputs), s) -> (
+		let (popped, remaining) = List.split_n s (List.length inputs) in
+		if (List.equal elem_match popped inputs) then 
+			Ok (outputs @ remaining)
 		else
-			raise (TypeErr "Expected and received are different")
+			Error "Expected and received are different"
 	)
-	| (BinOp (_, _), _) -> raise (TypeErr "underflow")
 	
-	| (Quote_ word, s) -> (Quote (type_apply word))::s
+	| (Apply, (Quote q_ts)::s) -> type_apply s q_ts
+	| (Apply, _) -> Error "expected quote"
 
-	| (Apply, (Quote f)::s) -> f s
-	| (Apply, _) -> raise (TypeErr "expected quote")
-
-let infer tss = 
-	List.fold_left (fun accum ts -> type_apply ts accum) [] tss |> List.rev
+let infer tss =  
+	List.fold_result tss ~init:[] ~f:type_apply |> Result.map ~f:List.rev
