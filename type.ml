@@ -1,35 +1,26 @@
 open Base
 
-type type_sig = 
-	| Push of elem
-	| Drop
-	| Dup
-	| BinOp of (elem list * elem list)
-	| Apply
-and elem = Generic | Num | Symbol | Quote of type_sig
+type type_sig = Op of (elem list * elem list) | Apply
+and elem = Poly of char | Mono of string | Quote of type_sig
 
 let elem_match l r = match (l, r) with
-	| (Generic, _) -> true
-	| (_, Generic) -> true
+	| (Poly _, _) -> true
+	| (_, Poly _) -> true
 	| (a, b) -> true
 
-let rec type_apply stack ts = match (ts, stack) with
-	| (Push t, _) -> Ok (t::stack)
-	
-	| (Drop, t::s) -> Ok s
-	| (Drop, _) -> Error "underflow"
-	
-	| (Dup, t::s) -> Ok (t::t::s)
-	| (Dup, _) -> Error "underflow"
-	
-	| (BinOp (inputs, outputs), s) -> (
+let push t = Op ([], [t])
+let drop = Op([Poly 'a'], [])
+let dup = Op([Poly 'a'], [Poly 'a'; Poly 'a'])
+let quote ts = push (Quote ts)
+
+let rec type_apply stack ts = match (ts, stack) with	
+	| (Op (inputs, outputs), s) -> (
 		let (popped, remaining) = List.split_n s (List.length inputs) in
 		if (List.equal elem_match popped inputs) then 
 			Ok (outputs @ remaining)
 		else
 			Error "Expected and received are different"
 	)
-	
 	| (Apply, (Quote q_ts)::s) -> type_apply s q_ts
 	| (Apply, _) -> Error "expected quote"
 
