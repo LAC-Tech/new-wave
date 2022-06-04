@@ -11,9 +11,7 @@ and elem = Generic | Num | Symbol | Quote of type_sig
 let elem_match l r = match (l, r) with
 	| (Generic, _) -> true
 	| (_, Generic) -> true
-	| (a, b) -> false
-
-
+	| (a, b) -> true
 
 let rec type_apply stack ts = match (ts, stack) with
 	| (Push t, _) -> Ok (t::stack)
