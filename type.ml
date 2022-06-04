@@ -34,14 +34,16 @@ let quote ts = push (Quote ts)
 let rec type_apply stack ts = match (ts, stack) with	
 	| (Op (inputs, outputs), s) -> (
 		let (popped, remaining) = List.split_n s (List.length inputs) in
-		let type_map = List.map2_exn inputs popped ~f:(fun i p -> (
+		let map_elems i p = 
 			if elem_match i p then Ok (i, p) else Error "no match"
-		)) |> Result.all in
+		in
+		let type_map = List.map2_exn inputs popped ~f:map_elems |> Result.all in
+		let inner_lookup e tm = 
+			List.Assoc.find tm ~equal:elem_equal e
+			|> Result.of_option ~error: "cannot lookup element"
+		in
 		let lookup (e: elem): (elem, string) Result.t =  
-			type_map |> Result.bind ~f:(fun tm -> 
-				List.Assoc.find tm ~equal:elem_equal e
-				|> Result.of_option ~error: "cannot lookup element"
-			) 
+			type_map |> Result.bind ~f:(inner_lookup e)
 		in
 		let new_outputs = List.map inputs ~f:lookup in
 		new_outputs |> Result.all |> Result.map ~f: (fun nos -> nos @ remaining)
