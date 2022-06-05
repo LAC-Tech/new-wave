@@ -42,25 +42,40 @@ let drop = Op([Poly 'a'], [])
 let dup = Op([Poly 'a'], [Poly 'a'; Poly 'a'])
 let quote ts = push (Quote ts)
 
-let create_type_map inputs popped = 
+module type TypeMap = sig
+	type t
+	val create : elem list -> elem list -> (t, string) Result.t
+	val to_string : t -> string
+	val lookup : t -> elem -> elem
+end
+
+module TypeMap = struct
+	type t = ((elem * elem) list, string) Result.t
+
+	let create inputs popped = 
 		let map_elems i p = 
 			if elem_match i p then Ok (i, p) else Error "no match"
 		in
 		List.map2_exn inputs popped ~f:map_elems |> Result.all
 
-let lookup type_map e =
+	let to_string tm =
+		let elem_pair_to_string (l, r) = 
+			Printf.sprintf "(%s, %s)" (elem_to_string l) (elem_to_string r)
+		in 
+		tm |> List.map ~f: elem_pair_to_string |> String.concat ~sep:"\n"
+
+	let lookup type_map e =
 		let inner_lookup tm = 
-			List.Assoc.find tm ~equal:elem_equal e
-			|> Result.of_option ~error: 
-				(Printf.sprintf "cannot lookup %s" (elem_to_string e))
+			List.Assoc.find tm ~equal:elem_equal e |> Option.value ~default: e
 		in
-		type_map |> Result.bind ~f:inner_lookup
+		type_map |> Result.map ~f:inner_lookup
+end
 
 let rec type_apply stack ts = match (ts, stack) with	
 	| (Op (inputs, outputs), s) -> (
 		let (popped, remaining) = List.split_n s (List.length inputs) in
-		let type_map = create_type_map inputs popped in
-		let new_outputs = List.map outputs ~f:(lookup type_map) in
+		let type_map = TypeMap.create inputs popped in
+		let new_outputs = List.map outputs ~f:(TypeMap.lookup type_map) in
 		new_outputs |> Result.all |> Result.map ~f: (fun nos -> nos @ remaining)
 	)
 	| (Apply, (Quote q_ts)::s) -> type_apply s q_ts
