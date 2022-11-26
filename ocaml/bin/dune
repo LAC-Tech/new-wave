@@ -1,0 +1,4 @@
+(executable
+ (public_name new_wave)
+ (name main)
+ (libraries new_wave))
