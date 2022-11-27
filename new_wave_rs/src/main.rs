@@ -1,11 +1,64 @@
 use std::io::{stdin, Write};
-use std::ops::{Add, Sub, Div, Mul};
+use std::ops::{AddAssign, SubAssign, MulAssign, DivAssign};
 use std::fmt;
 
-type Word = f64;
+/**
+ * NEW WAVE
+ * A Concatenative language bytecode interpreter.
+ */
+
+/** TODO: union type, including integers. Try and keep it 64 bits. */
+type Operand = f64;
+
+/** I'm hoping I can fit this all in 8 bits. */
+#[repr(u8)]
+enum OpCode {
+	// Push,
+	
+	Add, Sub, Mul, Div
+}
+
+struct Chunk {
+	operands: [Operand; 15], 	// 15 * 8 bytes = 120 bytes
+	op_codes: [OpCode; 8],		// + 8 bytes = 128 bytes
+}
+
+struct VM {
+	ds: Vec<Operand>
+}
+
+impl VM {
+	fn new() -> Self {
+		Self { ds: vec![] }
+	}
+
+	fn bin_op<Op: for<'r> Fn(&'r mut Operand, Operand) -> ()>(
+		&mut self, 	op: Op
+	) -> Result<(), String> {
+		match (self.ds.pop(), self.ds.last_mut()) {
+			(Some(x), Some(tos)) => Ok(op(tos, x)),
+			_ => Err("stack underflow\n".to_string())
+		}
+	}
+
+	fn exec(&mut self, chunk: &Chunk) -> Result<(), String> {
+		let mut op_codes = chunk.op_codes.iter();
+
+		while let Some(op_code) = op_codes.next() {
+			match op_code {
+				OpCode::Add => self.bin_op(Operand::add_assign)?,
+				OpCode::Sub => self.bin_op(Operand::sub_assign)?,
+				OpCode::Div => self.bin_op(Operand::div_assign)?,
+				OpCode::Mul => self.bin_op(Operand::mul_assign)?,
+			}
+		}
+
+		Ok(())
+	}
+}
 
 struct TopLevel {
-	ds: Vec<Word>
+	ds: Vec<Operand>
 }
 
 impl TopLevel {
@@ -13,24 +66,23 @@ impl TopLevel {
 		Self { ds: vec![] }
 	}
 
-	fn bin_op<Op: Fn(Word, Word) -> Word>(
-		&mut self, 
-		op: Op
+	fn bin_op<Op: for<'r> Fn(&'r mut Operand, Operand) -> ()>(
+		&mut self, 	
+	op: Op
 	) -> Result<(), String> {
-		// TODO: benchmark if it's quicker to pop once and modify TOS directly
-		match (self.ds.pop(), self.ds.pop()) {
-			(Some(y), Some(x)) => Ok(self.ds.push(op(x, y))),
+		match (self.ds.pop(), self.ds.last_mut()) {
+			(Some(x), Some(tos)) => Ok(op(tos, x)), //Ok(self.ds.push(op(x, y))),
 			_ => Err("stack underflow\n".to_string())
 		}
 	}
 
 	fn exec_token(&mut self, token: &str) -> Result<(), String> {
 		match token {
-			"+" => self.bin_op(Word::add),
-			"-" => self.bin_op(Word::sub),
-			"/" => self.bin_op(Word::div),
-			"*" => self.bin_op(Word::mul),
-			t => t.parse::<Word>()
+			"+" => self.bin_op(Operand::add_assign),
+			"-" => self.bin_op(Operand::sub_assign),
+			"/" => self.bin_op(Operand::div_assign),
+			"*" => self.bin_op(Operand::mul_assign),
+			t => t.parse::<Operand>()
 				.map(|n| self.ds.push(n))
 				.map_err(|_| format!("{} is not a number\n", t))
 		}
@@ -41,7 +93,6 @@ impl TopLevel {
 			.split_whitespace()
 			.try_for_each(|t| self.exec_token(t))
 			.map_or_else(|err| err, |_| self.to_string())
-
 	}
 }
 
