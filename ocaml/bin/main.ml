@@ -3,7 +3,7 @@ open New_wave
 
 let rec repl top_level =
 	let s = read_line () |> Lib.Top_level.eval top_level in
-	s |> print_string;
+	(Printf.sprintf "> %s" s) |> print_string;
 	repl top_level
 
 	

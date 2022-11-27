@@ -10,32 +10,33 @@ module Top_level = struct
 		Str.split by_whitespace)
 
 	let exec_token (top_level: t) (token: string) =
-		let pop () = Stack.pop top_level.ds in
-		let push = Stack.push top_level.ds in
-		let bin_op op = match (pop (), pop ()) with
-			| (Some x, Some y) -> Ok(op y x |> push)
+		let bin_op op = match (Stack.pop top_level.ds, Stack.pop top_level.ds) with
+			| (Some x, Some y) -> Ok(op y x |> Stack.push top_level.ds)
 			| _ -> Error("stack underflow")
 		in
-
 		match token with
 			| "+" -> bin_op (+)
 			| "-" -> bin_op (-)
+			| "/" -> bin_op (/)
 			| t -> (
 				match Caml.int_of_string_opt token with 
-				| Some n -> Ok(push n)
+				| Some n -> Ok(Stack.push top_level.ds n)
 				| None -> Error (Printf.sprintf "%s is not a number" t)
 			)
 
 	let to_string top_level = 
-		let values = top_level.ds
-			|> Stack.to_list
-			|> List.map ~f:Int.to_string 
-			|> List.rev 
-			|> String.concat ~sep:" "
-		in
-		let types = List.init (Stack.length top_level.ds) ~f: (Fn.const "num")
-			|> String.concat ~sep:" "
-		in Printf.sprintf "%s : %s\n" values types
+		if Stack.is_empty top_level.ds then
+			""
+		else
+			let values = top_level.ds
+				|> Stack.to_list
+				|> List.map ~f:Int.to_string 
+				|> List.rev 
+				|> String.concat ~sep:" "
+			in
+			let types = List.init (Stack.length top_level.ds) ~f: (Fn.const "num")
+				|> String.concat ~sep:" "
+			in Printf.sprintf "%s : %s\n" values types
 
 	let rec exec_tokens (top_level: t) (tokens: string Sequence.t) =
 		match Sequence.next tokens with
@@ -46,10 +47,9 @@ module Top_level = struct
 		)
 		| _ -> Ok ()
 
-	let eval (top_level: t) (s: string) : string = 
-		match s |> tokenize  with 
-		| [] -> ""
-		| tokens -> tokens 
+	let eval (top_level: t) (input: string) : string = 
+		input 
+			|> tokenize  
 			|> Sequence.of_list
 			|> exec_tokens top_level
 			|> Result.map ~f: (fun _ -> to_string top_level)

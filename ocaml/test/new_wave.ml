@@ -20,7 +20,10 @@ let suite =
       "eval empty input" >:: test_eval "" "";
       "primitive expression" >:: test_eval "486" "486 : num\n";
       "add ints" >:: test_eval "137 349 +" "486 : num\n";
-      "subtract ints" >:: test_eval "1000 334 -" "666 : num\n"
+      "subtract ints" >:: test_eval "1000 334 -" "666 : num\n";
+      "divide ints" >:: test_eval "10 5 /" "2 : num\n";
+      (* "add real to int" >:: test_eval "2.7 10 +" "12.7 : num\n"; *)
+      "add multiple ints" >:: test_eval "21 35 + 12 + 7 +" "75 : num\n";
     ]
   ]
 
