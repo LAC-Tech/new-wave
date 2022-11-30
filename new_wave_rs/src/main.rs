@@ -1,69 +1,78 @@
 use std::collections::HashMap;
 use std::io::{stdin, Write};
-use std::ops::{AddAssign, SubAssign, MulAssign, DivAssign};
 use std::fmt;
 
 /**
  * NEW WAVE
- * A Concatenative language bytecode interpreter.
+ * A Concatenative language interpreter, using subroutine threading.
  */
 
-/** TODO: union type, including integers. Try and keep it 64 bits. */
 type Operand = f64;
-type OpCode = u64;
+// cast to usize as needed - cleaner than assuming 64 bit usize
+type OpCode = u64; 
 
-type Instruction = fn(
+type Subroutine = fn(
 	&mut VM,
-	ip: &mut std::vec::IntoIter<OpCode>
+	ip: &mut std::slice::Iter<OpCode>
 ) -> Result<(), String>;
 
-struct Primitive (OpCode, Instruction);
+struct Instruction {
+	op_code: OpCode, 
+	subr: Subroutine
+}
 
-const PUSH: Primitive = Primitive(0x0, |vm, ip| {
-	ip.next()
-		.map(|literal| vm.ds.push(f64::from_bits(literal as u64)))
-		.ok_or("stack underflow".to_string())
-});
+macro_rules! bin_op {
+    ($op:tt) => (|vm, _| {
+    	match (vm.ds.pop(), vm.ds.last_mut()) {
+			(Some(x), Some(tos)) => Ok((*tos $op x)),
+			_ => Err("stack underflow\n".to_string())
+		}
+    })
+}
 
-const ADD: Primitive =
-	Primitive(0x10, |vm, _| VM::bin_op(vm, Operand::add_assign));
-const SUB: Primitive =
-	Primitive(0x11, |vm, _| VM::bin_op(vm, Operand::sub_assign));
-const MUL: Primitive = 
-	Primitive(0x12, |vm, _| VM::bin_op(vm, Operand::mul_assign));
-const DIV: Primitive =
-	Primitive(0x13, |vm, _| VM::bin_op(vm, Operand::div_assign));
+macro_rules! isa {
+	( $(($i:ident, $op_code:literal, $subr:expr)),*) => {
+		$(
+			const $i: Instruction = Instruction { 
+				op_code: $op_code, 
+				subr: $subr
+			};
+		)*
+	}
+}
+
+isa!(
+	(PUSH, 0x0, |vm, ip| {
+		ip.next()
+			.map(|&literal| vm.ds.push(f64::from_bits(literal as u64)))
+			.ok_or("stack underflow".to_string())
+	}),
+	(ADD, 0x10, bin_op!(+=)),
+	(SUB, 0x11, bin_op!(-=)),
+	(MUL, 0x12, bin_op!(*=)),
+	(DIV, 0x13, bin_op!(/=)));
 
 struct VM {
 	ds: Vec<Operand>,
-	memory: Vec<Instruction>
+	memory: Vec<Subroutine>
 }
 
 impl VM {
 	fn new() -> Self {
 		let ds = vec![];
-		let mut memory: Vec<Instruction> = vec![|_, _| Ok (()); 16];
+		let mut memory: Vec<Subroutine> = vec![|_, _| Ok (()); 16];
 
 		for p in &[PUSH, ADD, SUB, MUL, DIV] {
-			memory.insert(p.0 as usize, p.1);
+			memory.insert(p.op_code as usize, p.subr);
 		}
 
 		Self { ds, memory }
 	}
 
-	fn bin_op<Op: for<'r> Fn(&'r mut Operand, Operand) -> ()>(
-		&mut self, 	op: Op
-	) -> Result<(), String> {
-		match (self.ds.pop(), self.ds.last_mut()) {
-			(Some(x), Some(tos)) => Ok(op(tos, x)),
-			_ => Err("stack underflow\n".to_string())
-		}
-	}
-
-	fn exec(&mut self, addresses: Vec<OpCode>) -> Result<(), String> {
+	fn exec(&mut self, addresses: &[OpCode]) -> Result<(), String> {
 		let mut as_iter = addresses.into_iter();
 
-		while let Some(address) = as_iter.next() {
+		while let Some(&address) = as_iter.next() {
 			self.memory[address as usize](self, &mut as_iter)?;
 		}
 
@@ -90,7 +99,7 @@ impl std::fmt::Display for VM {
 
 struct TopLevel {
 	vm: VM,
-	env: HashMap<String, OpCode>
+	env: HashMap<String, OpCode>,
 }
 
 impl TopLevel {
@@ -101,34 +110,32 @@ impl TopLevel {
 			("-", SUB),
 			("*", MUL),
 			("/", DIV),
-		].map(|(name, primitive)| (name.to_string(), primitive.0)));
+		].map(|(name, primitive)| (name.to_string(), primitive.op_code)));
 
 		Self { vm, env }
 	}
 
-	// TODO: assumes everything fits in one chunk
-	fn parse(&self, input: &str) -> Result<Vec<OpCode>, String> {
-		let mut result: Vec<OpCode> = vec![];
-
-		for token in input.split_whitespace() {
-			match self.env.get(token) {
-				Some(&word) => result.push(word),
-				None => {
-					if let Ok(n) = token.parse::<Operand>() {
-						result.extend_from_slice(&[PUSH.0, f64::to_bits(n)]);
-					} else {
-						return Err(format!("{} is not a number\n", token));
-					}
-				}
+	fn parse_token(&self, op_code_buf: &mut Vec<OpCode>, token: &str) -> Result<(), String> {
+		match self.env.get(token) {
+			Some(&word) => Ok(op_code_buf.push(word)),
+			None => {
+				if let Ok(n) = token.parse::<Operand>() {
+					let op_codes = &[PUSH.op_code, f64::to_bits(n)];
+					op_code_buf.extend_from_slice(op_codes);
+					Ok(())
+				} else {
+					Err(format!("{} is not a number\n", token))
+				}				
 			}
 		}
-
-		Ok(result)
 	}
 
 	fn eval(&mut self, input: &str) -> String {
-		self.parse(input)
-			.and_then(|iv| self.vm.exec(iv))
+		let mut result: Vec<OpCode> = vec![];
+
+		input.split_whitespace()
+			.try_for_each(|token| self.parse_token(&mut result, token))
+			.and_then(|_| self.vm.exec(&result))
 			.map_or_else(|err| err, |_| self.vm.to_string())
 	}
 }
