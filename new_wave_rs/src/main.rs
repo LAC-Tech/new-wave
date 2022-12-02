@@ -8,72 +8,83 @@ use std::fmt;
  */
 
 type Operand = f64;
-// cast to usize as needed - cleaner than assuming 64 bit usize
-type OpCode = u64; 
+type OpCode = u8;
 
-type Subroutine = fn(
-	&mut VM,
-	ip: &mut std::slice::Iter<OpCode>
-) -> Result<(), String>;
+const PUSH: u8 = 0;
 
-struct Instruction {
-	op_code: OpCode, 
-	subr: Subroutine
+const ADD: u8 = 0x10;
+const SUB: u8 = 0x11;
+const MUL: u8 = 0x12;
+const DIV: u8 = 0x13;
+
+const CALL: u8 = 0x20;
+
+const HALT: u8 = 0xff;
+
+struct Chunk {
+	operands: [Operand; 13],
+	op_codes: [OpCode; 24]
 }
 
-macro_rules! bin_op {
-    ($op:tt) => (|vm, _| {
-    	match (vm.ds.pop(), vm.ds.last_mut()) {
-			(Some(x), Some(tos)) => Ok((*tos $op x)),
-			_ => Err("stack underflow\n".to_string())
+impl Chunk {
+	fn new() -> Self {
+		Self {
+			operands: [Operand::NAN; 13],
+			op_codes: [HALT; 24],
 		}
-    })
-}
+	}
 
-macro_rules! isa {
-	( $(($i:ident, $op_code:literal, $subr:expr)),*) => {
-		$(
-			const $i: Instruction = Instruction { 
-				op_code: $op_code, 
-				subr: $subr
-			};
-		)*
+	fn operand(&self, index: u8) -> Operand {
+		self.operands[index as usize]
 	}
 }
 
-isa!(
-	(PUSH, 0x0, |vm, ip| {
-		ip.next()
-			.map(|&literal| vm.ds.push(f64::from_bits(literal as u64)))
-			.ok_or("stack underflow".to_string())
-	}),
-	(ADD, 0x10, bin_op!(+=)),
-	(SUB, 0x11, bin_op!(-=)),
-	(MUL, 0x12, bin_op!(*=)),
-	(DIV, 0x13, bin_op!(/=)));
-
 struct VM {
 	ds: Vec<Operand>,
-	memory: Vec<Subroutine>
+	memory: Vec<Chunk>
 }
 
 impl VM {
 	fn new() -> Self {
-		let ds = vec![];
-		let mut memory: Vec<Subroutine> = vec![|_, _| Ok (()); 16];
-
-		for p in &[PUSH, ADD, SUB, MUL, DIV] {
-			memory.insert(p.op_code as usize, p.subr);
-		}
-
-		Self { ds, memory }
+		Self { ds: vec![], memory: vec![] }
 	}
 
-	fn exec(&mut self, addresses: &[OpCode]) -> Result<(), String> {
-		let mut as_iter = addresses.into_iter();
+	fn exec(&mut self, chunk: &Chunk) -> Result<(), String> {
+		let mut ip: std::slice::Iter<u8> = chunk.op_codes.iter();
+		let mut rs: Vec<std::slice::Iter<u8>> = vec![];
 
-		while let Some(&address) = as_iter.next() {
-			self.memory[address as usize](self, &mut as_iter)?;
+		macro_rules! bin_op {
+		    ($op:tt) => {
+		    	match (self.ds.pop(), self.ds.last_mut()) {
+					(Some(x), Some(tos)) => Ok((*tos $op x)),
+					_ => Err("stack underflow\n".to_string())
+				}
+			}
+		}
+
+		while let Some(&op_code) = ip.next() {
+			match op_code as OpCode {
+				PUSH => ip.next()
+					.map(|&index| self.ds.push(chunk.operand(index)))
+					.ok_or_else(|| "stack underflow".to_string()),
+				ADD => bin_op!(+=),
+				SUB => bin_op!(-=),
+				MUL => bin_op!(*=),
+				DIV => bin_op!(/=),
+
+				CALL => {
+					let tmp = ip;
+					rs.push(tmp);
+					ip = rs.pop().unwrap();
+
+					Err(String::new())
+				}
+
+				HALT => break,
+
+				_ => Err(format!("Illegal Instruction {}", op_code))
+
+			}?
 		}
 
 		Ok(())
@@ -93,55 +104,108 @@ impl std::fmt::Display for VM {
 
 		let types = vec!["num"; self.ds.len()].join(" ");
 
-		write!(f, "{} : {}\n", values, types)
+		writeln!(f, "{} : {}", values, types)
 	}
 }
 
-struct TopLevel {
-	vm: VM,
-	env: HashMap<String, OpCode>,
+enum ExecToken {
+	Subroutine(OpCode),
+	Literal(Operand),
+	// CompTime(&'a str) // immediate in forth, parsing word in factor
 }
 
-impl TopLevel {
+struct ChunkBuf {
+	operands: Vec<Operand>,
+	op_codes: Vec<OpCode>
+}
+impl ChunkBuf {
 	fn new() -> Self {
-		let vm = VM::new();
-		let env = HashMap::from([
-			("+", ADD),
-			("-", SUB),
-			("*", MUL),
-			("/", DIV),
-		].map(|(name, primitive)| (name.to_string(), primitive.op_code)));
-
-		Self { vm, env }
+		ChunkBuf { operands: vec![], op_codes: vec![] }
 	}
 
-	fn parse_token(&self, op_code_buf: &mut Vec<OpCode>, token: &str) -> Result<(), String> {
-		match self.env.get(token) {
-			Some(&word) => Ok(op_code_buf.push(word)),
-			None => {
-				if let Ok(n) = token.parse::<Operand>() {
-					let op_codes = &[PUSH.op_code, f64::to_bits(n)];
-					op_code_buf.extend_from_slice(op_codes);
-					Ok(())
-				} else {
-					Err(format!("{} is not a number\n", token))
-				}				
+	fn push(&mut self, token: ExecToken) {
+		match token {
+			ExecToken::Subroutine(op_code) => {
+				self.op_codes.push(op_code);
+			},
+			ExecToken::Literal(literal) => {	
+				self.op_codes.push(PUSH);
+				self.op_codes.push(self.operands.len() as OpCode);
+				self.operands.push(literal);
 			}
 		}
 	}
 
-	fn eval(&mut self, input: &str) -> String {
-		let mut result: Vec<OpCode> = vec![];
+	fn finish(&mut self) -> Chunk {
+		let mut res = Chunk::new();
 
-		input.split_whitespace()
-			.try_for_each(|token| self.parse_token(&mut result, token))
-			.and_then(|_| self.vm.exec(&result))
+		for (i, operand) in self.operands.drain(..).enumerate() {
+			res.operands[i] = operand;
+		}
+
+		for (i, op_code) in self.op_codes.drain(..).enumerate() {
+			res.op_codes[i] = op_code;
+		}
+
+		res
+	}
+}
+
+struct Env(HashMap<String, OpCode>);
+
+impl Env {
+	fn new() -> Self {
+		let table = HashMap::from([
+			("+", ADD),
+			("-", SUB),
+			("*", MUL),
+			("/", DIV)
+		].map(|(name, op_code)| (name.to_string(), op_code)));
+
+		Self(table)
+	}
+
+	fn parse(&self, lexeme: &str) -> Result<ExecToken, String> {
+		if let Some(&word) = self.0.get(lexeme) {
+			Ok(ExecToken::Subroutine(word))
+		} else if let Ok(n) = lexeme.parse::<Operand>() {
+			Ok(ExecToken::Literal(n))
+		} else {
+			Err(format!("{} is not a number\n", lexeme))
+		}
+	}
+}
+
+struct Interpreter {
+	vm: VM,
+	env: Env,
+}
+
+impl Interpreter {
+	fn new() -> Self {
+		Self { vm: VM::new(), env: Env::new() }
+	}
+
+	fn parse(&self, input: &str) -> Result<Vec<ExecToken>, String> {
+		let lexemes = input.split_whitespace();
+		lexemes.map(|lexeme| self.env.parse(lexeme)).collect()
+	}
+
+	fn eval(&mut self, input: &str) -> String {
+		let mut buf = ChunkBuf::new();
+
+		self.parse(input)
+			.map(|tokens| tokens.into_iter().for_each(|token| buf.push(token)))
+			.and_then(|_| {
+				self.vm.exec(&buf.finish())?;
+				Ok(())
+			})
 			.map_or_else(|err| err, |_| self.vm.to_string())
 	}
 }
 
 fn main() -> Result<(), std::io::Error> {
-	let mut top_level = TopLevel::new();
+	let mut top_level = Interpreter::new();
 	let mut input = String::new();
 
 	loop {
@@ -155,82 +219,77 @@ fn main() -> Result<(), std::io::Error> {
 
 #[cfg(test)]
 mod errors {
-    use crate::TopLevel;
-
-    #[test]
-    fn floating() {
-    	assert_eq!(f64::from_bits(f64::to_bits(12.7)), 12.7);
-    }
+    use crate::Interpreter;
 
     #[test]
     fn stack_underflow() {
-        assert_eq!(TopLevel::new().eval("1 +"), "stack underflow\n");
+        assert_eq!(Interpreter::new().eval("1 +"), "stack underflow\n");
     }
 }
 
 #[cfg(test)]
 mod type_inference {
-	use crate::TopLevel;
+	use crate::Interpreter;
 
     #[test]
     fn two_constants() {
-    	assert_eq!(TopLevel::new().eval("42 30"), "42 30 : num num\n");
+    	assert_eq!(Interpreter::new().eval("42 30"), "42 30 : num num\n");
     }
 }
 
 #[cfg(test)]
 mod sicp_examples {
-	use crate::TopLevel;
+	use crate::Interpreter;
 
 	#[test]
 	fn eval_empty_input() {
-		assert_eq!(TopLevel::new().eval(""), "");
+		assert_eq!(Interpreter::new().eval(""), "");
 	}
 
 	#[test]
 	fn primitive_expression() {
-		assert_eq!(TopLevel::new().eval("486"), "486 : num\n");
+		assert_eq!(Interpreter::new().eval("486"), "486 : num\n");
 	}
 
 	#[test]
 	fn add_ints() {
-		assert_eq!(TopLevel::new().eval("137 349 +"), "486 : num\n");
+		assert_eq!(Interpreter::new().eval("137 349 +"), "486 : num\n");
 	}
 
 	#[test]
 	fn subtract_ints() {
-		assert_eq!(TopLevel::new().eval("1000 334 -"), "666 : num\n");
+		assert_eq!(Interpreter::new().eval("1000 334 -"), "666 : num\n");
 	}
 
 	#[test]
 	fn divide_ints() {
-		assert_eq!(TopLevel::new().eval("10 5 /"), "2 : num\n");	
+		assert_eq!(Interpreter::new().eval("10 5 /"), "2 : num\n");	
 	}
 
 	#[test]
 	fn add_real_to_int() {
-		assert_eq!(TopLevel::new().eval("2.7 10 +"), "12.7 : num\n");		
+		assert_eq!(Interpreter::new().eval("2.7 10 +"), "12.7 : num\n");		
 	}
 
 	#[test]
 	fn add_multiple_ints() {
-		assert_eq!(TopLevel::new().eval("21 35 + 12 + 7 +"), "75 : num\n");
+		assert_eq!(Interpreter::new().eval("21 35 + 12 + 7 +"), "75 : num\n");
 	}
 
 	#[test]
 	fn multiply_multiple_ints() {
-		assert_eq!(TopLevel::new().eval("25 4 * 12 *"), "1200 : num\n");
+		assert_eq!(Interpreter::new().eval("25 4 * 12 *"), "1200 : num\n");
 	}
 
 	#[test]
 	fn nested_combinations() {
-		assert_eq!(TopLevel::new().eval("3 5 * 10 6 - +"), "19 : num\n");
+		assert_eq!(Interpreter::new().eval("3 5 * 10 6 - +"), "19 : num\n");
 	}
 
 	#[test]
 	fn relatively_simple_expressions() {
 		assert_eq!(
-			TopLevel::new().eval("3 2 4 * 3 5 + + * 10 7 - 6 + +"), 
+			Interpreter::new().eval("3 2 4 * 3 5 + + * 10 7 - 6 + +"), 
 			"57 : num\n"
 		);
 	}
