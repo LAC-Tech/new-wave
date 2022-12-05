@@ -8,81 +8,46 @@ use std::fmt;
  */
 
 type Operand = f64;
-type OpCode = u8;
+type Instr = u64;
 
-const PUSH: u8 = 0;
-
-const ADD: u8 = 0x10;
-const SUB: u8 = 0x11;
-const MUL: u8 = 0x12;
-const DIV: u8 = 0x13;
-
-const CALL: u8 = 0x20;
-const RET: u8 = 0x21;
-
-const HALT: u8 = 0xff;
-
-#[derive(Debug)]
-struct Chunk<'a> {
-	operands: &'a[Operand],
-	op_codes: &'a[OpCode]
-}
-
-struct Memory<'a> {
-	operands: Vec<Operand>,
-	op_codes: Vec<OpCode>,
-	chunks: Vec<Chunk<'a>>
-}
-
-impl<'a> Memory<'a> {
-	fn new() -> Self {
-		Self {
-			operands: vec![],
-			op_codes: vec![],
-			chunks: vec![]
-		}
-	}
-
-	fn lol(&mut self) {
-		self.chunks.push(
-			Chunk { 
-				operands: &self.operands[0..1], 
-				op_codes: &self.op_codes[0..1]
-			})
-	}
-}
+const PUSH:	Instr	= 0xffffffffffffff_9f;
+const ADD: 	Instr	= 0xffffffffffffff_af;
+const SUB: 	Instr	= 0xffffffffffffff_bf;
+const MUL: 	Instr	= 0xffffffffffffff_cf;
+const DIV: 	Instr	= 0xffffffffffffff_df;
+const RET: 	Instr	= 0xffffffffffffff_ef;
+const HALT: Instr	= 0xffffffffffffff_ff;
 
 struct Frame<'a> {
 	pc: usize,
-	chunk: Chunk<'a>
+	instructions: &'a[u64]
 }
 
 impl<'a> Frame<'a> {
-	fn new(chunk: &'a Chunk) -> Self {
-		Self { pc: 0, chunk }
+	fn new(instructions: &'a[Instr]) -> Self {
+		Self { pc: 0, instructions }
 	}
 
 	fn next_index(&mut self) -> usize {
-		let res = self.chunk.op_codes[self.pc] as usize;
+		let res = self.instructions[self.pc] as usize;
+		self.pc += 1;
+		res
+	}
+
+	fn next(&mut self) -> Instr {
+		let res = self.instructions[self.pc];
 		self.pc += 1;
 		res
 	}
 
 	fn next_operand(&mut self) -> Operand {
-		let index = self.next_index();
-		self.chunk.operands[index]
-	}
-
-	fn next(&mut self) -> OpCode {
-		let res = self.chunk.op_codes[self.pc];
-		self.pc += 1;
-		res
+		f64::from_bits(self.next())
 	}
 }
 
 struct VM {
 	ds: Vec<Operand>,
-	memory: Vec<Chunk>
+	memory: Vec<u64>
 }
 
 impl VM {
@@ -90,8 +55,8 @@ impl VM {
 		Self { ds: vec![], memory: vec![] }
 	}
 
-	fn exec(&mut self, chunk: &Chunk) -> Result<(), String> {
-		let mut ip = Frame::new(chunk);
+	fn exec(&mut self, instructions: &[u64]) -> Result<(), String> {
+		let mut ip = Frame::new(instructions);
 		let mut rs: Vec<Frame> = vec![];
 
 		macro_rules! bin_op {
@@ -116,14 +81,6 @@ impl VM {
 				MUL => bin_op!(*=),
 				DIV => bin_op!(/=),
 
-				CALL => {
-					let index = ip.next_index();
-					rs.push(ip);
-					ip = Frame::new(&self.memory[index]);
-
-					Ok(())
-				},
-
 				RET => {
 					rs.pop()
 						.map(|old_ip| ip = old_ip)
@@ -132,7 +89,13 @@ impl VM {
 
 				HALT => break,
 
-				_ => Err(format!("Illegal Instruction {}", op_code))
+				// Lower numbers are implicitly calls
+				addr => {
+					rs.push(ip);
+					ip = Frame::new(&self.memory[addr as usize..]);
+
+					Ok(())
+				}
 
 			}?;
 		}
@@ -159,61 +122,51 @@ impl std::fmt::Display for VM {
 }
 
 enum ExecToken {
-	Subroutine(OpCode),
+	Subroutine(Instr),
 	Literal(Operand),
 	// CompTime(&'a str) // immediate in forth, parsing word in factor
 }
 
-struct ChunkBuf {
-	operands: Vec<Operand>,
-	op_codes: Vec<OpCode>
+// TODO: useless? fold back into eval?
+struct InstrBuf {
+	buf: Vec<Instr>,
+	sentinel: Instr
 }
 
-impl ChunkBuf {
-	fn new() -> Self {
-		ChunkBuf { operands: vec![], op_codes: vec![] }
+impl InstrBuf {
+	fn new(sentinel: Instr) -> Self {
+		Self {buf: vec![], sentinel }
 	}
 
 	fn push(&mut self, token: ExecToken) {
 		match token {
 			ExecToken::Subroutine(op_code) => {
-				self.op_codes.push(op_code);
+				self.buf.push(op_code);
 			},
 			ExecToken::Literal(literal) => {	
-				self.op_codes.push(PUSH);
-				self.op_codes.push(self.operands.len() as OpCode);
-				self.operands.push(literal);
+				self.buf.push(PUSH);
+				self.buf.push(f64::to_bits(literal));
 			}
 		}
 	}
 
-	fn finish(&mut self) -> Chunk {
-		let mut res = Chunk::new();
-
-		for (i, operand) in self.operands.drain(..).enumerate() {
-			res.operands[i] = operand;
-		}
-
-		for (i, op_code) in self.op_codes.drain(..).enumerate() {
-			res.op_codes[i] = op_code;
-		}
-
-		dbg!(&res);
-
-		res
+	// TODO: apply optimisations here
+	fn finish(&mut self) -> &[Instr] {
+		self.buf.push(self.sentinel);
+		&self.buf
 	}
 }
 
-struct Env(HashMap<String, OpCode>);
+struct Env(HashMap<String, Instr>);
 
 impl Env {
 	fn new() -> Self {
 		let table = HashMap::from([
-			("+", ADD),
-			("-", SUB),
-			("*", MUL),
-			("/", DIV)
-		].map(|(name, op_code)| (name.to_string(), op_code)));
+			("+".to_string(), ADD),
+			("-".to_string(), SUB),
+			("*".to_string(), MUL),
+			("/".to_string(), DIV)
+		]);
 
 		Self(table)
 	}
@@ -245,12 +198,12 @@ impl Interpreter {
 	}
 
 	fn eval(&mut self, input: &str) -> String {
-		let mut buf = ChunkBuf::new();
+		let mut buf = InstrBuf::new(HALT);
 
 		self.parse(input)
 			.map(|tokens| tokens.into_iter().for_each(|token| buf.push(token)))
 			.and_then(|_| {
-				self.vm.exec(&buf.finish())?;
+				self.vm.exec(buf.finish())?;
 				Ok(())
 			})
 			.map_or_else(|err| err, |_| self.vm.to_string())
