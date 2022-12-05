@@ -18,24 +18,65 @@ const MUL: u8 = 0x12;
 const DIV: u8 = 0x13;
 
 const CALL: u8 = 0x20;
+const RET: u8 = 0x21;
 
 const HALT: u8 = 0xff;
 
-struct Chunk {
-	operands: [Operand; 13],
-	op_codes: [OpCode; 24]
+#[derive(Debug)]
+struct Chunk<'a> {
+	operands: &'a[Operand],
+	op_codes: &'a[OpCode]
 }
 
-impl Chunk {
+struct Memory<'a> {
+	operands: Vec<Operand>,
+	op_codes: Vec<OpCode>,
+	chunks: Vec<Chunk<'a>>
+}
+
+impl<'a> Memory<'a> {
 	fn new() -> Self {
 		Self {
-			operands: [Operand::NAN; 13],
-			op_codes: [HALT; 24],
+			operands: vec![],
+			op_codes: vec![],
+			chunks: vec![]
 		}
 	}
 
-	fn operand(&self, index: u8) -> Operand {
-		self.operands[index as usize]
+	fn lol(&mut self) {
+		self.chunks.push(
+			Chunk { 
+				operands: &self.operands[0..1], 
+				op_codes: &self.op_codes[0..1]
+			})
+	}
+}
+
+struct Frame<'a> {
+	pc: usize,
+	chunk: Chunk<'a>
+}
+
+impl<'a> Frame<'a> {
+	fn new(chunk: &'a Chunk) -> Self {
+		Self { pc: 0, chunk }
+	}
+
+	fn next_index(&mut self) -> usize {
+		let res = self.chunk.op_codes[self.pc] as usize;
+		self.pc += 1;
+		res
+	}
+
+	fn next_operand(&mut self) -> Operand {
+		let index = self.next_index();
+		self.chunk.operands[index]
+	}
+
+	fn next(&mut self) -> OpCode {
+		let res = self.chunk.op_codes[self.pc];
+		self.pc += 1;
+		res
 	}
 }
 
@@ -50,8 +91,8 @@ impl VM {
 	}
 
 	fn exec(&mut self, chunk: &Chunk) -> Result<(), String> {
-		let mut ip: std::slice::Iter<u8> = chunk.op_codes.iter();
-		let mut rs: Vec<std::slice::Iter<u8>> = vec![];
+		let mut ip = Frame::new(chunk);
+		let mut rs: Vec<Frame> = vec![];
 
 		macro_rules! bin_op {
 		    ($op:tt) => {
@@ -62,29 +103,38 @@ impl VM {
 			}
 		}
 
-		while let Some(&op_code) = ip.next() {
-			match op_code as OpCode {
-				PUSH => ip.next()
-					.map(|&index| self.ds.push(chunk.operand(index)))
-					.ok_or_else(|| "stack underflow".to_string()),
+		loop {
+			let op_code = ip.next();
+
+			match op_code {
+				PUSH => {
+					self.ds.push(ip.next_operand());
+					Ok(())
+				}
 				ADD => bin_op!(+=),
 				SUB => bin_op!(-=),
 				MUL => bin_op!(*=),
 				DIV => bin_op!(/=),
 
 				CALL => {
-					let tmp = ip;
-					rs.push(tmp);
-					ip = rs.pop().unwrap();
+					let index = ip.next_index();
+					rs.push(ip);
+					ip = Frame::new(&self.memory[index]);
 
-					Err(String::new())
-				}
+					Ok(())
+				},
+
+				RET => {
+					rs.pop()
+						.map(|old_ip| ip = old_ip)
+						.ok_or_else(|| "empty return stack".to_string())
+				},
 
 				HALT => break,
 
 				_ => Err(format!("Illegal Instruction {}", op_code))
 
-			}?
+			}?;
 		}
 
 		Ok(())
@@ -118,6 +168,7 @@ struct ChunkBuf {
 	operands: Vec<Operand>,
 	op_codes: Vec<OpCode>
 }
+
 impl ChunkBuf {
 	fn new() -> Self {
 		ChunkBuf { operands: vec![], op_codes: vec![] }
@@ -146,6 +197,8 @@ impl ChunkBuf {
 		for (i, op_code) in self.op_codes.drain(..).enumerate() {
 			res.op_codes[i] = op_code;
 		}
+
+		dbg!(&res);
 
 		res
 	}
