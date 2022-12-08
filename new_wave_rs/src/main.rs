@@ -1,3 +1,4 @@
+
 use std::collections::HashMap;
 use std::io::{stdin, Write};
 use std::fmt;
@@ -10,12 +11,13 @@ use std::fmt;
 type Operand = f64;
 type Instr = u64;
 
-const PUSH:	Instr	= 0xffffffffffffff_9f;
-const ADD: 	Instr	= 0xffffffffffffff_af;
-const SUB: 	Instr	= 0xffffffffffffff_bf;
-const MUL: 	Instr	= 0xffffffffffffff_cf;
-const DIV: 	Instr	= 0xffffffffffffff_df;
-const RET: 	Instr	= 0xffffffffffffff_ef;
+const PUSH:	Instr	= 0xffffffffffffff_f8;
+const DUP:	Instr	= 0xffffffffffffff_f9;
+const ADD: 	Instr	= 0xffffffffffffff_fa;
+const SUB: 	Instr	= 0xffffffffffffff_fb;
+const MUL: 	Instr	= 0xffffffffffffff_fc;
+const DIV: 	Instr	= 0xffffffffffffff_fd;
+const RET: 	Instr	= 0xffffffffffffff_fe;
 const HALT: Instr	= 0xffffffffffffff_ff;
 
 struct Frame<'a> {
@@ -26,12 +28,6 @@ struct Frame<'a> {
 impl<'a> Frame<'a> {
 	fn new(instructions: &'a[Instr]) -> Self {
 		Self { pc: 0, instructions }
-	}
-
-	fn next_index(&mut self) -> usize {
-		let res = self.instructions[self.pc] as usize;
-		self.pc += 1;
-		res
 	}
 
 	fn next(&mut self) -> Instr {
@@ -52,7 +48,7 @@ struct VM {
 
 impl VM {
 	fn new() -> Self {
-		Self { ds: vec![], memory: vec![] }
+		Self { ds: vec![], memory: vec![DUP, MUL, RET] }
 	}
 
 	fn exec(&mut self, instructions: &[u64]) -> Result<(), String> {
@@ -75,7 +71,10 @@ impl VM {
 				PUSH => {
 					self.ds.push(ip.next_operand());
 					Ok(())
-				}
+				},
+				DUP => self.ds.last().cloned()
+					.map(|operand| self.ds.push(operand))
+					.ok_or_else(|| "stack underflow\n".to_string()),
 				ADD => bin_op!(+=),
 				SUB => bin_op!(-=),
 				MUL => bin_op!(*=),
@@ -96,7 +95,6 @@ impl VM {
 
 					Ok(())
 				}
-
 			}?;
 		}
 
@@ -121,66 +119,7 @@ impl std::fmt::Display for VM {
 	}
 }
 
-enum ExecToken {
-	Subroutine(Instr),
-	Literal(Operand),
-	// CompTime(&'a str) // immediate in forth, parsing word in factor
-}
-
-// TODO: useless? fold back into eval?
-struct InstrBuf {
-	buf: Vec<Instr>,
-	sentinel: Instr
-}
-
-impl InstrBuf {
-	fn new(sentinel: Instr) -> Self {
-		Self {buf: vec![], sentinel }
-	}
-
-	fn push(&mut self, token: ExecToken) {
-		match token {
-			ExecToken::Subroutine(op_code) => {
-				self.buf.push(op_code);
-			},
-			ExecToken::Literal(literal) => {	
-				self.buf.push(PUSH);
-				self.buf.push(f64::to_bits(literal));
-			}
-		}
-	}
-
-	// TODO: apply optimisations here
-	fn finish(&mut self) -> &[Instr] {
-		self.buf.push(self.sentinel);
-		&self.buf
-	}
-}
-
-struct Env(HashMap<String, Instr>);
-
-impl Env {
-	fn new() -> Self {
-		let table = HashMap::from([
-			("+".to_string(), ADD),
-			("-".to_string(), SUB),
-			("*".to_string(), MUL),
-			("/".to_string(), DIV)
-		]);
-
-		Self(table)
-	}
-
-	fn parse(&self, lexeme: &str) -> Result<ExecToken, String> {
-		if let Some(&word) = self.0.get(lexeme) {
-			Ok(ExecToken::Subroutine(word))
-		} else if let Ok(n) = lexeme.parse::<Operand>() {
-			Ok(ExecToken::Literal(n))
-		} else {
-			Err(format!("{} is not a number\n", lexeme))
-		}
-	}
-}
+type Env = HashMap<String, Instr>;
 
 struct Interpreter {
 	vm: VM,
@@ -189,24 +128,44 @@ struct Interpreter {
 
 impl Interpreter {
 	fn new() -> Self {
-		Self { vm: VM::new(), env: Env::new() }
+		let env = HashMap::from([
+			("sq".to_string(), 0),
+			("+".to_string(), ADD),
+			("-".to_string(), SUB),
+			("*".to_string(), MUL),
+			("/".to_string(), DIV)
+		]);
+
+		Self { vm: VM::new(), env }
 	}
 
-	fn parse(&self, input: &str) -> Result<Vec<ExecToken>, String> {
-		let lexemes = input.split_whitespace();
-		lexemes.map(|lexeme| self.env.parse(lexeme)).collect()
+	fn inner_eval(&mut self, input: &str) -> Result<(), String> {
+		let mut instr_buf = vec![];
+
+		let mut lexemes = input.split_whitespace();
+
+		while let Some(lexeme) = lexemes.next() {
+			if lexeme == ":" {
+				lexemes.next().map(|name| println!("{}", name));
+			}
+
+
+	    	if let Some(&instr) = self.env.get(lexeme) {
+				instr_buf.push(instr);
+			} else if let Ok(literal) = lexeme.parse::<Operand>() {
+				instr_buf.extend([PUSH, f64::to_bits(literal)]);
+			} else {
+				return Err("lex error".to_string())
+			}
+		}
+	
+		instr_buf.push(HALT);
+		self.vm.exec(&instr_buf)
 	}
 
 	fn eval(&mut self, input: &str) -> String {
-		let mut buf = InstrBuf::new(HALT);
-
-		self.parse(input)
-			.map(|tokens| tokens.into_iter().for_each(|token| buf.push(token)))
-			.and_then(|_| {
-				self.vm.exec(buf.finish())?;
-				Ok(())
-			})
-			.map_or_else(|err| err, |_| self.vm.to_string())
+		self.inner_eval(input)
+			.map_or_else(|err| err,  |_| self.vm.to_string())
 	}
 }
 
