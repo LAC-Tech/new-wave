@@ -11,14 +11,14 @@ use std::fmt;
 type Operand = f64;
 type Instr = u64;
 
-const PUSH:	Instr	= 0xffffffffffffff_f8;
-const DUP:	Instr	= 0xffffffffffffff_f9;
-const ADD: 	Instr	= 0xffffffffffffff_fa;
-const SUB: 	Instr	= 0xffffffffffffff_fb;
-const MUL: 	Instr	= 0xffffffffffffff_fc;
-const DIV: 	Instr	= 0xffffffffffffff_fd;
-const RET: 	Instr	= 0xffffffffffffff_fe;
-const HALT: Instr	= 0xffffffffffffff_ff;
+const PUSH:	Instr	= 0xffffffffffffff_ff;
+const DUP:	Instr	= 0xffffffffffffff_fe;
+const ADD: 	Instr	= 0xffffffffffffff_fd;
+const SUB: 	Instr	= 0xffffffffffffff_fc;
+const MUL: 	Instr	= 0xffffffffffffff_fb;
+const DIV: 	Instr	= 0xffffffffffffff_fa;
+const RET: 	Instr	= 0xffffffffffffff_f9;
+const HALT: Instr	= 0xffffffffffffff_f8;
 
 struct Frame<'a> {
 	pc: usize,
@@ -85,20 +85,15 @@ impl VM {
 				SUB => bin_op!(-=),
 				MUL => bin_op!(*=),
 				DIV => bin_op!(/=),
-
-				RET => {
-					rs.pop()
-						.map(|old_ip| ip = old_ip)
-						.ok_or_else(|| "empty return stack".to_string())
-				},
-
+				RET => rs.pop()
+					.map(|old_ip| ip = old_ip)
+					.ok_or_else(|| "empty return stack".to_string()),
 				HALT => break,
 
 				// Lower numbers are implicitly calls
 				addr => {
 					rs.push(ip);
 					ip = Frame::new(&self.memory[addr as usize..]);
-
 					Ok(())
 				}
 			}?;
@@ -125,6 +120,32 @@ impl std::fmt::Display for VM {
 	}
 }
 
+#[derive(Debug, PartialEq)]
+struct TypeSig(i8, i8);
+
+impl TypeSig {
+	fn compose(self, other: Self) -> Self {
+		let diff = self.1 - other.0;
+
+		if diff == 0 {
+			TypeSig(self.0, other.1)
+		} else if 0 > diff {
+			TypeSig(self.0 + diff.abs(), other.1)
+		} else {
+			TypeSig(self.0, other.1 + diff)
+		}
+	}
+}
+
+// impl std::fmt::Display for TypeSig {
+// 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+// 		write!(
+// 			f, 
+// 			"{} -> {}", vec!["num"; self.inputs].join(" "), 
+// 			"{} -> {}", vec!["num"; self.outputs].join(" "))
+// 	}
+// }
+
 type Env = HashMap<String, Instr>;
 
 struct Interpreter {
@@ -146,8 +167,6 @@ impl Interpreter {
 	}
 
 	fn inner_eval(&mut self, input: &str) -> Result<(), String> {
-
-
 		let mut exec_buf = vec![];
 		let mut def_buf = vec![];
 		let mut instr_buf: &mut Vec<Instr> = &mut exec_buf;
@@ -212,11 +231,42 @@ mod errors {
 
 #[cfg(test)]
 mod type_inference {
-	use crate::Interpreter;
+	use crate::{Interpreter, TypeSig};
 
     #[test]
     fn two_constants() {
     	assert_eq!(Interpreter::new().eval("42 30"), "42 30 : num num\n");
+    }
+
+    #[test]
+    fn dup_mul() {
+    	assert_eq!(TypeSig(1, 2).compose(TypeSig(2, 1)), TypeSig(1, 1))
+    }
+
+    #[test]
+    fn dup_dup() {
+    	assert_eq!(TypeSig(1, 2).compose(TypeSig(1, 2)), TypeSig(1, 3))
+    }
+
+    #[test]
+    fn mul_mul() {
+    	assert_eq!(TypeSig(2, 1).compose(TypeSig(2, 1)), TypeSig(3, 1))
+    }
+
+    #[test]
+    fn swap_div() {
+    	assert_eq!(TypeSig(2, 2).compose(TypeSig(2, 1)), TypeSig(2, 1))
+    }
+
+    #[test]
+
+    fn dup_dup_mul_mul() {
+    	let actual = TypeSig(1, 2)
+    		.compose(TypeSig(1, 2))
+    		.compose(TypeSig(2, 1))
+    		.compose(TypeSig(2, 1));
+
+    	assert_eq!(actual, TypeSig(1, 1))	
     }
 }
 
