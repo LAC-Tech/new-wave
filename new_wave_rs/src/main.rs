@@ -48,7 +48,13 @@ struct VM {
 
 impl VM {
 	fn new() -> Self {
-		Self { ds: vec![], memory: vec![DUP, MUL, RET] }
+		Self { ds: vec![], memory: vec![] }
+	}
+
+	fn write<I: IntoIterator<Item = Instr>>(&mut self, intrs: I) -> Instr {
+		let result = self.memory.len();
+		self.memory.extend(intrs);
+		result as Instr
 	}
 
 	fn exec(&mut self, instructions: &[u64]) -> Result<(), String> {
@@ -129,7 +135,7 @@ struct Interpreter {
 impl Interpreter {
 	fn new() -> Self {
 		let env = HashMap::from([
-			("sq".to_string(), 0),
+			("dup".to_string(), DUP),
 			("+".to_string(), ADD),
 			("-".to_string(), SUB),
 			("*".to_string(), MUL),
@@ -140,17 +146,29 @@ impl Interpreter {
 	}
 
 	fn inner_eval(&mut self, input: &str) -> Result<(), String> {
-		let mut instr_buf = vec![];
+
+
+		let mut exec_buf = vec![];
+		let mut def_buf = vec![];
+		let mut instr_buf: &mut Vec<Instr> = &mut exec_buf;
+
+		let mut name = "";
 
 		let mut lexemes = input.split_whitespace();
 
 		while let Some(lexeme) = lexemes.next() {
 			if lexeme == ":" {
-				lexemes.next().map(|name| println!("{}", name));
-			}
+				lexemes.next().map(|new_name| {
+					name = new_name
+				});
+				instr_buf = &mut def_buf;
+			} else if lexeme == ";" {
+				instr_buf.push(RET);
+				let addr = self.vm.write(instr_buf.drain(..));
+				self.env.insert(name.to_string(), addr);
 
-
-	    	if let Some(&instr) = self.env.get(lexeme) {
+				instr_buf = &mut exec_buf;
+			} else if let Some(&instr) = self.env.get(lexeme) {
 				instr_buf.push(instr);
 			} else if let Ok(literal) = lexeme.parse::<Operand>() {
 				instr_buf.extend([PUSH, f64::to_bits(literal)]);
