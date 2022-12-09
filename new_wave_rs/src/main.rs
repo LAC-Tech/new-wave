@@ -5,7 +5,7 @@ use std::fmt;
 
 /**
  * NEW WAVE
- * A Concatenative language interpreter, using subroutine threading.
+ * A Concatenative language interpreter.
  */
 
 type Operand = f64;
@@ -58,49 +58,37 @@ impl VM {
 		result as Instr
 	}
 
-	fn exec(&mut self, instructions: &[u64]) -> Result<(), String> {
+	fn exec(&mut self, instructions: &[u64]) {
 		let mut ip = Frame::new(instructions);
 		let mut rs: Vec<Frame> = vec![];
 
 		macro_rules! bin_op {
 		    ($op:tt) => {
-		    	match (self.ds.pop(), self.ds.last_mut()) {
-					(Some(x), Some(tos)) => Ok((*tos $op x)),
-					_ => Err("stack underflow\n".to_string())
-				}
+		    	*self.ds.last_mut().unwrap() $op self.ds.pop().unwrap()
 			}
 		}
 
+		/* No sanity checking is done here, it's the job of the interpreter to provide correct instructions */
 		loop {
 			let op_code = ip.next();
 
 			match op_code {
-				PUSH => {
-					self.ds.push(ip.next_operand());
-					Ok(())
-				},
-				DUP => self.ds.last().cloned()
-					.map(|operand| self.ds.push(operand))
-					.ok_or_else(|| "stack underflow\n".to_string()),
+				PUSH => self.ds.push(ip.next_operand()),
+				DUP => self.ds.push(self.ds.last().cloned().unwrap()),
 				ADD => bin_op!(+=),
 				SUB => bin_op!(-=),
 				MUL => bin_op!(*=),
 				DIV => bin_op!(/=),
-				RET => rs.pop()
-					.map(|old_ip| ip = old_ip)
-					.ok_or_else(|| "empty return stack".to_string()),
+				RET => ip = rs.pop().unwrap(),
 				HALT => break,
 
 				// Lower numbers are implicitly calls
 				addr => {
 					rs.push(ip);
 					ip = Frame::new(&self.memory[addr as usize..]);
-					Ok(())
 				}
-			}?;
+			};
 		}
-
-		Ok(())
 	}
 }
 
@@ -183,8 +171,13 @@ impl WordBuf {
 	}
 
 	fn execute_at_runtime(&mut self, vm: &mut VM) -> Result<(), String> {
-		self.instrs.push(HALT);
-		vm.exec(&self.instrs)
+		if self.type_sig.0 > vm.ds.len() as u8 {
+			Err("stack underflow\n".to_string())
+		} else {
+			self.instrs.push(HALT);
+			vm.exec(&self.instrs);
+			Ok(())
+		}
 	}
 }
 
