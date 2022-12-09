@@ -1,5 +1,6 @@
 
 use std::collections::HashMap;
+use std::cmp::Ordering;
 use std::io::{stdin, Write};
 use std::fmt;
 
@@ -116,12 +117,11 @@ impl TypeSig {
 	fn compose(self, other: Self) -> Self {
 		let diff = self.1 as i16 - other.0 as i16;
 
-		if diff == 0 {
-			TypeSig(self.0, other.1)
-		} else if 0 > diff {
-			TypeSig(self.0 + diff.abs() as u8, other.1)
-		} else {
-			TypeSig(self.0, other.1 + diff as u8)
+		match (diff).cmp(&0) {
+			Ordering::Greater => TypeSig(self.0, other.1 + diff as u8),
+			Ordering::Equal => TypeSig(self.0, other.1),
+			Ordering::Less => 
+				TypeSig(self.0 + diff.unsigned_abs() as u8, other.1),
 		}
 	}
 }
@@ -163,7 +163,7 @@ impl WordBuf {
 	}
 
 	fn write_to_memory(&mut self, vm: &mut VM) -> Word {
-		let type_sig = self.type_sig.clone(); // TODO: is `clone` needed? 
+		let type_sig = self.type_sig;
 		self.instrs.push(RET);
 		self.type_sig = TypeSig(0, 0);
 		let instr = vm.write(self.instrs.drain(..));
@@ -234,9 +234,9 @@ impl Interpreter {
 
 		while let Some(lexeme) = lexemes.next() {
 			if lexeme == ":" {
-				lexemes.next().map(|new_name| {
+				if let Some(new_name) = lexemes.next() {
 					name = new_name
-				});
+				}
 				word_buf = &mut def_buf;
 			} else if lexeme == ";" {
 				let word = word_buf.write_to_memory(&mut self.vm);
