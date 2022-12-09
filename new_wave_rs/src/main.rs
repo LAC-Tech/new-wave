@@ -11,6 +11,7 @@ use std::fmt;
 type Operand = f64;
 type Instr = u64;
 
+// Grows downard - leaves lower numbers for user defined functions.
 const PUSH:	Instr	= 0xffffffffffffff_ff;
 const DUP:	Instr	= 0xffffffffffffff_fe;
 const ADD: 	Instr	= 0xffffffffffffff_fd;
@@ -120,33 +121,80 @@ impl std::fmt::Display for VM {
 	}
 }
 
-#[derive(Debug, PartialEq)]
-struct TypeSig(i8, i8);
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TypeSig(u8, u8);
 
 impl TypeSig {
 	fn compose(self, other: Self) -> Self {
-		let diff = self.1 - other.0;
+		let diff = self.1 as i16 - other.0 as i16;
 
 		if diff == 0 {
 			TypeSig(self.0, other.1)
 		} else if 0 > diff {
-			TypeSig(self.0 + diff.abs(), other.1)
+			TypeSig(self.0 + diff.abs() as u8, other.1)
 		} else {
-			TypeSig(self.0, other.1 + diff)
+			TypeSig(self.0, other.1 + diff as u8)
 		}
 	}
 }
 
-// impl std::fmt::Display for TypeSig {
-// 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-// 		write!(
-// 			f, 
-// 			"{} -> {}", vec!["num"; self.inputs].join(" "), 
-// 			"{} -> {}", vec!["num"; self.outputs].join(" "))
-// 	}
-// }
+impl std::fmt::Display for TypeSig {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(
+			f, 
+			"{} -> {}", 
+			vec!["num"; self.0 as usize].join(" "), 
+			vec!["num"; self.1 as usize].join(" "))
+	}
+}
 
-type Env = HashMap<String, Instr>;
+#[derive(Clone, Copy)]
+struct Word {
+	instr: Instr,
+	type_sig: TypeSig
+}
+
+struct WordBuf {
+	instrs: Vec<Instr>,
+	type_sig: TypeSig
+}
+
+impl WordBuf {
+	fn new() -> Self {
+		Self { instrs: vec![], type_sig: TypeSig(0, 0) }
+	}
+
+	fn push(&mut self, word: Word) {
+		self.instrs.push(word.instr);
+		self.type_sig = self.type_sig.compose(word.type_sig);
+	}
+
+	fn push_literal(&mut self, operand: Operand) {
+		self.instrs.extend([PUSH, f64::to_bits(operand)]);
+		self.type_sig = self.type_sig.compose(TypeSig(0, 1));
+	}
+
+	fn write_to_memory(&mut self, vm: &mut VM) -> Word {
+		let type_sig = self.type_sig.clone(); // TODO: is `clone` needed? 
+		self.instrs.push(RET);
+		self.type_sig = TypeSig(0, 0);
+		let instr = vm.write(self.instrs.drain(..));
+		Word { instr, type_sig }
+	}
+
+	fn execute_at_runtime(&mut self, vm: &mut VM) -> Result<(), String> {
+		self.instrs.push(HALT);
+		vm.exec(&self.instrs)
+	}
+}
+
+impl Word {
+	fn new(instr: Instr, type_sig: TypeSig) -> Self {
+		Self { instr, type_sig }
+	}
+}
+
+type Env = HashMap<String, Word>;
 
 struct Interpreter {
 	vm: VM,
@@ -156,22 +204,26 @@ struct Interpreter {
 impl Interpreter {
 	fn new() -> Self {
 		let env = HashMap::from([
-			("dup".to_string(), DUP),
-			("+".to_string(), ADD),
-			("-".to_string(), SUB),
-			("*".to_string(), MUL),
-			("/".to_string(), DIV)
-		]);
+			("dup", DUP, (1, 2)),
+			("+", 	ADD, (2, 1)),
+			("-", 	SUB, (2, 1)),
+			("*", 	MUL, (2, 1)),
+			("/", 	DIV, (2, 1))
+		].map(|(id, instr, (inputs, outputs))| {
+			(id.to_string(), Word::new(instr, TypeSig(inputs, outputs)))
+		}));
 
 		Self { vm: VM::new(), env }
 	}
 
 	fn inner_eval(&mut self, input: &str) -> Result<(), String> {
-		let mut exec_buf = vec![];
-		let mut def_buf = vec![];
-		let mut instr_buf: &mut Vec<Instr> = &mut exec_buf;
+		let mut exec_buf = WordBuf::new();
+		let mut def_buf = WordBuf::new();
+		let mut word_buf: &mut WordBuf = &mut exec_buf;
 
 		let mut name = "";
+		// let mut def_output_buffer = vec![];
+
 
 		let mut lexemes = input.split_whitespace();
 
@@ -180,24 +232,21 @@ impl Interpreter {
 				lexemes.next().map(|new_name| {
 					name = new_name
 				});
-				instr_buf = &mut def_buf;
+				word_buf = &mut def_buf;
 			} else if lexeme == ";" {
-				instr_buf.push(RET);
-				let addr = self.vm.write(instr_buf.drain(..));
-				self.env.insert(name.to_string(), addr);
-
-				instr_buf = &mut exec_buf;
-			} else if let Some(&instr) = self.env.get(lexeme) {
-				instr_buf.push(instr);
-			} else if let Ok(literal) = lexeme.parse::<Operand>() {
-				instr_buf.extend([PUSH, f64::to_bits(literal)]);
+				let word = word_buf.write_to_memory(&mut self.vm);
+				self.env.insert(name.to_string(), word);
+				word_buf = &mut exec_buf;
+			} else if let Some(&word) = self.env.get(lexeme) {
+				word_buf.push(word);
+			} else if let Ok(operand) = lexeme.parse::<Operand>() {
+				word_buf.push_literal(operand);
 			} else {
 				return Err("lex error".to_string())
 			}
 		}
 	
-		instr_buf.push(HALT);
-		self.vm.exec(&instr_buf)
+		word_buf.execute_at_runtime(&mut self.vm)
 	}
 
 	fn eval(&mut self, input: &str) -> String {
@@ -266,7 +315,7 @@ mod type_inference {
     		.compose(TypeSig(2, 1))
     		.compose(TypeSig(2, 1));
 
-    	assert_eq!(actual, TypeSig(1, 1))	
+    	assert_eq!(actual, TypeSig(1, 1))
     }
 }
 
