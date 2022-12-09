@@ -23,18 +23,18 @@ const HALT: Instr	= 0xffffffffffffff_f8;
 
 struct Frame<'a> {
 	pc: usize,
-	instructions: &'a[u64]
+	instrs: &'a[Instr]
 }
 
 impl<'a> Frame<'a> {
-	fn new(instructions: &'a[Instr]) -> Self {
-		Self { pc: 0, instructions }
+	fn new(instrs: &'a[Instr]) -> Self {
+		Self { pc: 0, instrs }
 	}
 
 	fn next(&mut self) -> Instr {
-		let res = self.instructions[self.pc];
+		let next_instr = self.instrs[self.pc];
 		self.pc += 1;
-		res
+		next_instr
 	}
 
 	fn next_operand(&mut self) -> Operand {
@@ -58,8 +58,8 @@ impl VM {
 		result as Instr
 	}
 
-	fn exec(&mut self, instructions: &[u64]) {
-		let mut ip = Frame::new(instructions);
+	fn exec(&mut self, instrs: &[u64]) {
+		let mut ip = Frame::new(instrs);
 		let mut rs: Vec<Frame> = vec![];
 
 		macro_rules! bin_op {
@@ -195,16 +195,30 @@ struct Interpreter {
 }
 
 impl Interpreter {
+
 	fn new() -> Self {
-		let env = HashMap::from([
-			("dup", DUP, (1, 2)),
-			("+", 	ADD, (2, 1)),
-			("-", 	SUB, (2, 1)),
-			("*", 	MUL, (2, 1)),
-			("/", 	DIV, (2, 1))
-		].map(|(id, instr, (inputs, outputs))| {
-			(id.to_string(), Word::new(instr, TypeSig(inputs, outputs)))
-		}));
+		macro_rules! stdlib {
+		    ($(($id:expr, $instr:expr, $inputs:expr => $outputs:expr)),* ) => {
+		    	{
+		    		let mut temp_hash = HashMap::new();
+			    	$(
+			    		temp_hash.insert(
+			    			$id.to_string(), 
+			    			Word::new($instr, TypeSig($inputs, $outputs)));
+			    	)*
+
+		    		temp_hash
+				}
+			};
+		}
+
+		let env = stdlib![
+			("dup",	DUP, 1 => 2),
+			("+", 	ADD, 2 => 1),
+			("-", 	SUB, 2 => 1),
+			("*", 	MUL, 2 => 1),
+			("/", 	DIV, 2 => 1)
+		];
 
 		Self { vm: VM::new(), env }
 	}
@@ -215,8 +229,6 @@ impl Interpreter {
 		let mut word_buf: &mut WordBuf = &mut exec_buf;
 
 		let mut name = "";
-		// let mut def_output_buffer = vec![];
-
 
 		let mut lexemes = input.split_whitespace();
 
