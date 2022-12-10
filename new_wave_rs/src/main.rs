@@ -20,7 +20,7 @@ const SUB: 	Instr	= 0xffffffffffffff_fc;
 const MUL: 	Instr	= 0xffffffffffffff_fb;
 const DIV: 	Instr	= 0xffffffffffffff_fa;
 const RET: 	Instr	= 0xffffffffffffff_f9;
-const HALT: Instr	= 0xffffffffffffff_f8;
+const HALT:	Instr	= 0xffffffffffffff_f8;
 
 struct Frame<'a> {
 	pc: usize,
@@ -115,13 +115,12 @@ struct TypeSig(u8, u8);
 
 impl TypeSig {
 	fn compose(self, other: Self) -> Self {
-		let diff = self.1 as i16 - other.0 as i16;
+		let d = self.1 as i16 - other.0 as i16;
 
-		match (diff).cmp(&0) {
-			Ordering::Greater => TypeSig(self.0, other.1 + diff as u8),
+		match (d).cmp(&0) {
+			Ordering::Greater => TypeSig(self.0, other.1 + d as u8),
 			Ordering::Equal => TypeSig(self.0, other.1),
-			Ordering::Less => 
-				TypeSig(self.0 + diff.unsigned_abs() as u8, other.1),
+			Ordering::Less => TypeSig(self.0 + d.unsigned_abs() as u8, other.1)
 		}
 	}
 }
@@ -129,9 +128,9 @@ impl TypeSig {
 impl std::fmt::Display for TypeSig {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(
-			f, 
-			"{} -> {}", 
-			vec!["num"; self.0 as usize].join(" "), 
+			f,
+			"{} -> {}",
+			vec!["num"; self.0 as usize].join(" "),
 			vec!["num"; self.1 as usize].join(" "))
 	}
 }
@@ -223,40 +222,39 @@ impl Interpreter {
 		Self { vm: VM::new(), env }
 	}
 
-	fn inner_eval(&mut self, input: &str) -> Result<(), String> {
+	fn eval(&mut self, input: &str) -> String {
 		let mut exec_buf = WordBuf::new();
 		let mut def_buf = WordBuf::new();
-		let mut word_buf: &mut WordBuf = &mut exec_buf;
+		let mut word_buf = &mut exec_buf;
 
 		let mut name = "";
-
 		let mut lexemes = input.split_whitespace();
+		let mut output_line_buf = vec![];
 
 		while let Some(lexeme) = lexemes.next() {
 			if lexeme == ":" {
-				if let Some(new_name) = lexemes.next() {
-					name = new_name
-				}
+				name = lexemes.next().expect("expected identifier");
 				word_buf = &mut def_buf;
 			} else if lexeme == ";" {
 				let word = word_buf.write_to_memory(&mut self.vm);
 				self.env.insert(name.to_string(), word);
 				word_buf = &mut exec_buf;
+				output_line_buf.push(format!("{} : {}", name, word.type_sig));
 			} else if let Some(&word) = self.env.get(lexeme) {
 				word_buf.push(word);
 			} else if let Ok(operand) = lexeme.parse::<Operand>() {
 				word_buf.push_literal(operand);
 			} else {
-				return Err("lex error".to_string())
+				return "lex error".to_string()
 			}
 		}
-	
-		word_buf.execute_at_runtime(&mut self.vm)
-	}
-
-	fn eval(&mut self, input: &str) -> String {
-		self.inner_eval(input)
-			.map_or_else(|err| err,  |_| self.vm.to_string())
+		
+		word_buf.execute_at_runtime(&mut self.vm).map_or_else(
+			|err| err,  
+			|_| {
+				output_line_buf.push(self.vm.to_string());
+				output_line_buf.join("\n")
+			})
 	}
 }
 
@@ -285,7 +283,7 @@ mod errors {
 
 #[cfg(test)]
 mod type_inference {
-	use crate::{Interpreter, TypeSig};
+	use crate::{Interpreter};
 
     #[test]
     fn two_constants() {
@@ -293,35 +291,27 @@ mod type_inference {
     }
 
     #[test]
-    fn dup_mul() {
-    	assert_eq!(TypeSig(1, 2).compose(TypeSig(2, 1)), TypeSig(1, 1))
-    }
+    fn square() {
+    	assert_eq!(
+    		Interpreter::new().eval(": sq dup * ;"), "sq : num -> num\n");
+	}
 
-    #[test]
-    fn dup_dup() {
-    	assert_eq!(TypeSig(1, 2).compose(TypeSig(1, 2)), TypeSig(1, 3))
-    }
+	#[test]
+	fn cube() {
+		assert_eq!(
+			Interpreter::new().eval(": cube dup dup * * ;"),
+			"cube : num -> num\n"
+		)
+	}
 
-    #[test]
-    fn mul_mul() {
-    	assert_eq!(TypeSig(2, 1).compose(TypeSig(2, 1)), TypeSig(3, 1))
-    }
+	#[test]
+	fn add1() {
+    	assert_eq!(
+    		Interpreter::new().eval(": add1 1 + ;"),
+    		"add1 : num -> num\n"
+		);
+	}
 
-    #[test]
-    fn swap_div() {
-    	assert_eq!(TypeSig(2, 2).compose(TypeSig(2, 1)), TypeSig(2, 1))
-    }
-
-    #[test]
-
-    fn dup_dup_mul_mul() {
-    	let actual = TypeSig(1, 2)
-    		.compose(TypeSig(1, 2))
-    		.compose(TypeSig(2, 1))
-    		.compose(TypeSig(2, 1));
-
-    	assert_eq!(actual, TypeSig(1, 1))
-    }
 }
 
 #[cfg(test)]
