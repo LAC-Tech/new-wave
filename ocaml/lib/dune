@@ -1,2 +1,0 @@
-(library
- (name new_wave) (libraries str base))

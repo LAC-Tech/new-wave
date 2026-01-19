@@ -1,2 +1,0 @@
-(test
- (name new_wave) (libraries new_wave ounit2))
