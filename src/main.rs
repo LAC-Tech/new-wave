@@ -109,6 +109,7 @@ impl fmt::Display for VM {
     }
 }
 
+// Very basic type sig that just does arity mismatch
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TypeSig(u8, u8);
 
@@ -178,6 +179,11 @@ impl WordBuf {
             Ok(())
         }
     }
+
+    fn clear(&mut self) {
+        self.instrs.clear();
+        self.type_sig = TypeSig(0, 0);
+    }
 }
 
 impl Word {
@@ -191,6 +197,8 @@ type Env = HashMap<String, Word>;
 struct Interpreter {
     vm: VM,
     env: Env,
+    def_buf: WordBuf,
+    exec_buf: WordBuf,
 }
 
 impl Interpreter {
@@ -218,13 +226,16 @@ impl Interpreter {
             ("/", 	DIV, 2 => 1)
         ];
 
-        Self { vm: VM::new(), env }
+        let vm = VM::new();
+        let exec_buf = WordBuf::new();
+        let def_buf = WordBuf::new();
+        Self { vm, env, exec_buf, def_buf }
     }
 
     fn eval(&mut self, input: &str) -> String {
-        let mut exec_buf = WordBuf::new();
-        let mut def_buf = WordBuf::new();
-        let mut word_buf = &mut exec_buf;
+        self.exec_buf.clear();
+        self.def_buf.clear();
+        let mut word_buf = &mut self.exec_buf;
 
         let mut name = "";
         let mut lexemes = input.split_whitespace();
@@ -233,11 +244,11 @@ impl Interpreter {
         while let Some(lexeme) = lexemes.next() {
             if lexeme == ":" {
                 name = lexemes.next().expect("expected identifier");
-                word_buf = &mut def_buf;
+                word_buf = &mut self.def_buf;
             } else if lexeme == ";" {
                 let word = word_buf.write_to_memory(&mut self.vm);
                 self.env.insert(name.to_string(), word);
-                word_buf = &mut exec_buf;
+                word_buf = &mut self.exec_buf;
                 output_line_buf.push(format!("{} : {}", name, word.type_sig));
             } else if let Some(&word) = self.env.get(lexeme) {
                 word_buf.push(word);
