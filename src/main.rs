@@ -1,23 +1,28 @@
 //! NEW WAVE
 //! A Concatenative language interpreter.
 
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::fmt;
-use std::io::{stdin, Write};
+mod ir;
+mod parser;
 
+fn main() -> Result<(), std::io::Error> {
+    panic!("REDO")
+    /*
+    let mut top_level = Interpreter::new();
+    let mut input = String::new();
+
+    loop {
+        print!("> ");
+        std::io::stdout().flush()?;
+        stdin().read_line(&mut input)?;
+        print!("{}", top_level.eval(&input));
+        input.clear();
+    }
+    */
+}
+
+/*
 type Operand = f64;
-type Instr = u64;
-
-// Grows downard - leaves lower numbers for user defined functions.
-const PUSH: Instr = 0xffffffffffffff_ff;
-const DUP: Instr = 0xffffffffffffff_fe;
-const ADD: Instr = 0xffffffffffffff_fd;
-const SUB: Instr = 0xffffffffffffff_fc;
-const MUL: Instr = 0xffffffffffffff_fb;
-const DIV: Instr = 0xffffffffffffff_fa;
-const RET: Instr = 0xffffffffffffff_f9;
-const HALT: Instr = 0xffffffffffffff_f8;
+type Addr = u64;
 
 struct Frame<'a> {
     pc: usize,
@@ -44,9 +49,8 @@ struct VM {
     ds: Vec<Operand>,
     memory: Vec<u64>,
 }
-
 /// Note: No sanity checking is done here, it's the job of the interpreter
-/// to provide correct instructions */
+/// to provide correct instructions
 impl VM {
     fn new() -> Self {
         Self { ds: vec![], memory: vec![] }
@@ -63,10 +67,10 @@ impl VM {
         let mut rs: Vec<Frame> = vec![];
 
         macro_rules! bin_op {
-		    ($op:tt) => {
-		    	*self.ds.last_mut().unwrap() $op self.ds.pop().unwrap()
-			}
-		}
+            ($op:tt) => {
+                *self.ds.last_mut().unwrap() $op self.ds.pop().unwrap()
+            }
+        }
         loop {
             let op_code = ip.next();
 
@@ -192,31 +196,61 @@ impl Word {
     }
 }
 
-type Env = HashMap<String, Word>;
+fn parse<'a>(input: &'a str) -> impl iter::Iterator<Item = Token<'a>> {
+    input.split_whitespace().map(|lexeme| match lexeme {
+        ":" => Token::DefBegin,
+        ";" => Token::DefEnd,
+        "[" => Token::QuoteBegin,
+        "]" => Token::QuoteEnd,
+        word => Token::Word(word),
+    })
+}
+
+enum Token<'a> {
+    DefBegin,
+    DefEnd,
+    QuoteBegin,
+    QuoteEnd,
+    Word(&'a str),
+}
+
+enum ParserErr {}
+
+enum Binding {
+    Subroutine(Addr),
+    Constant(Operand),
+}
+
+struct Env(HashMap<String, (Binding, TypeSig)>);
+
+impl Env {
+    fn semantic_analyze<'a>(tokens: impl iter::Iterator<Item = Token<'a>>) {}
+}
 
 struct Interpreter {
     vm: VM,
     env: Env,
     def_buf: WordBuf,
     exec_buf: WordBuf,
+    output_line_buf: Vec<String>,
 }
 
 impl Interpreter {
     fn new() -> Self {
         macro_rules! stdlib {
-		    ($(($id:expr, $instr:expr, $inputs:expr => $outputs:expr)),* ) => {
-		    	{
-		    		let mut temp_hash = HashMap::new();
-			    	$(
-			    		temp_hash.insert(
-			    			$id.to_string(),
-			    			Word::new($instr, TypeSig($inputs, $outputs)));
-			    	)*
+            ($(($id:expr, $instr:expr, $inputs:expr => $outputs:expr)),* ) => {
+                {
+                    let mut temp_hash = HashMap::new();
+                    $(
+                        temp_hash.insert(
+                            $id.to_string(),
+                            Word::new($instr, TypeSig($inputs, $outputs)));
+                    )*
 
-		    		temp_hash
-				}
-			};
-		}
+                    temp_hash
+                }
+            };
+        }
 
         let env = stdlib![
             ("dup",	DUP, 1 => 2),
@@ -229,7 +263,8 @@ impl Interpreter {
         let vm = VM::new();
         let exec_buf = WordBuf::new();
         let def_buf = WordBuf::new();
-        Self { vm, env, exec_buf, def_buf }
+        let output_line_buf = vec![];
+        Self { vm, env, exec_buf, def_buf, output_line_buf }
     }
 
     fn eval(&mut self, input: &str) -> String {
@@ -239,7 +274,6 @@ impl Interpreter {
 
         let mut name = "";
         let mut lexemes = input.split_whitespace();
-        let mut output_line_buf = vec![];
 
         while let Some(lexeme) = lexemes.next() {
             if lexeme == ":" {
@@ -249,7 +283,8 @@ impl Interpreter {
                 let word = word_buf.write_to_memory(&mut self.vm);
                 self.env.insert(name.to_string(), word);
                 word_buf = &mut self.exec_buf;
-                output_line_buf.push(format!("{} : {}", name, word.type_sig));
+                self.output_line_buf
+                    .push(format!("{} : {}", name, word.type_sig));
             } else if let Some(&word) = self.env.get(lexeme) {
                 word_buf.push(word);
             } else if let Ok(operand) = lexeme.parse::<Operand>() {
@@ -262,26 +297,15 @@ impl Interpreter {
         word_buf.execute_at_runtime(&mut self.vm).map_or_else(
             |err| err,
             |_| {
-                output_line_buf.push(self.vm.to_string());
-                output_line_buf.join("\n")
+                self.output_line_buf.push(self.vm.to_string());
+                self.output_line_buf.join("\n")
             },
         )
     }
 }
+*/
 
-fn main() -> Result<(), std::io::Error> {
-    let mut top_level = Interpreter::new();
-    let mut input = String::new();
-
-    loop {
-        print!("> ");
-        std::io::stdout().flush()?;
-        stdin().read_line(&mut input)?;
-        print!("{}", top_level.eval(&input));
-        input.clear();
-    }
-}
-
+/*
 #[cfg(test)]
 mod errors {
     use crate::Interpreter;
@@ -383,3 +407,4 @@ mod sicp_examples {
         );
     }
 }
+*/
