@@ -1,11 +1,24 @@
 use std::iter::Iterator;
 
 #[derive(Debug, Eq, PartialEq)]
-struct Token(u16, u16);
+enum Token {
+    Word(u16, u16),
+    StringLiteral(u16, u16),
+}
+
+enum Err {
+    UnterminatedString,
+}
 
 impl Token {
     fn str<'a>(&self, source_code: &'a str) -> &'a str {
-        &source_code[self.0.into()..self.1.into()]
+        match self {
+            &Token::Word(start, end) => &source_code[start.into()..end.into()],
+            &Token::StringLiteral(start, end) => {
+                let (start, end) = (start + 1, end - 1); // removing quotes
+                &source_code[start.into()..end.into()]
+            }
+        }
     }
 }
 
@@ -19,27 +32,49 @@ fn to_u16(i: usize) -> u16 {
 }
 
 impl<'a> Tokenizer<'a> {
-    fn advance_to_non_whitespace(&self) -> Option<usize> {
-        self.source_code[self.cursor..].find(|c: char| !c.is_whitespace())
+    fn advance_to_identifier(&self) -> Option<(usize, char)> {
+        self.source_code[self.cursor..]
+            .chars()
+            .enumerate()
+            .find(|(_i, c)| !c.is_whitespace())
     }
 
     fn advance_to_whitespace(&self) -> Option<usize> {
         self.source_code[self.cursor..].find(|c: char| c.is_whitespace())
+    }
+
+    fn advance_to_char(&self, c_to_find: char) -> Option<usize> {
+        self.source_code[self.cursor + 1..]
+            .find(|c: char| c == c_to_find)
+            .map(|i| i + 2)
     }
 }
 
 impl<'a> Iterator for Tokenizer<'a> {
     type Item = Token;
     fn next(&mut self) -> Option<Self::Item> {
-        self.cursor += self.advance_to_non_whitespace()?;
+        let (i, c) = self.advance_to_identifier()?;
+        self.cursor += i;
         let start_pos = to_u16(self.cursor);
 
-        self.cursor = self
-            .advance_to_whitespace()
-            .map(|offset| self.cursor + offset)
-            .unwrap_or(self.source_code.len());
+        match c {
+            '"' => {
+                self.cursor = self
+                    .advance_to_char('"')
+                    .map(|offset| self.cursor + offset)
+                    .unwrap_or(self.source_code.len());
 
-        Some(Token(start_pos, to_u16(self.cursor)))
+                Some(Token::StringLiteral(start_pos, to_u16(self.cursor)))
+            }
+            _ => {
+                self.cursor = self
+                    .advance_to_whitespace()
+                    .map(|offset| self.cursor + offset)
+                    .unwrap_or(self.source_code.len());
+
+                Some(Token::Word(start_pos, to_u16(self.cursor)))
+            }
+        }
     }
 }
 
@@ -53,19 +88,43 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn split() {
+    fn split_basic() {
         let sc = "hello world";
         let mut ts = tokenize(sc);
 
         let t = ts.next();
-        assert_eq!(t, Some(Token(0, 5)));
+        assert_eq!(t, Some(Token::Word(0, 5)));
         assert_eq!(t.unwrap().str(sc), "hello");
 
         let t = ts.next();
-        assert_eq!(t, Some(Token(6, 11)));
+        assert_eq!(t, Some(Token::Word(6, 11)));
         assert_eq!(t.unwrap().str(sc), "world");
 
         let t = ts.next();
         assert_eq!(t, None);
     }
+
+    #[test]
+    fn split_with_quoted_string() {
+        let sc = "\"hello\" \"world\" concat";
+        let mut ts = tokenize(sc);
+
+        let t = ts.next();
+        assert_eq!(t, Some(Token::StringLiteral(0, 7)));
+        assert_eq!(t.unwrap().str(sc), "hello");
+
+        let t = ts.next();
+        assert_eq!(t, Some(Token::StringLiteral(8, 15)));
+        assert_eq!(t.unwrap().str(sc), "world");
+
+        let t = ts.next();
+        assert_eq!(t, Some(Token::Word(16, 22)));
+        assert_eq!(t.unwrap().str(sc), "concat");
+
+        let t = ts.next();
+        assert_eq!(t, None);
+    }
+
+    #[test]
+    fn unterminated_string_literal() {}
 }
