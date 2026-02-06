@@ -1,20 +1,21 @@
-use std::iter::Iterator;
+use std::{error::Error, iter::Iterator};
 
 #[derive(Debug, Eq, PartialEq)]
 enum Token {
     Word(u16, u16),
-    StringLiteral(u16, u16),
+    StrLit(u16, u16),
 }
 
+#[derive(Debug, Eq, PartialEq)]
 enum Err {
-    UnterminatedString,
+    UnterminatedStrLit,
 }
 
 impl Token {
     fn str<'a>(&self, source_code: &'a str) -> &'a str {
         match self {
             &Token::Word(start, end) => &source_code[start.into()..end.into()],
-            &Token::StringLiteral(start, end) => {
+            &Token::StrLit(start, end) => {
                 let (start, end) = (start + 1, end - 1); // removing quotes
                 &source_code[start.into()..end.into()]
             }
@@ -51,28 +52,27 @@ impl<'a> Tokenizer<'a> {
 }
 
 impl<'a> Iterator for Tokenizer<'a> {
-    type Item = Token;
+    type Item = Result<Token, Err>;
     fn next(&mut self) -> Option<Self::Item> {
         let (i, c) = self.advance_to_identifier()?;
         self.cursor += i;
         let start_pos = to_u16(self.cursor);
 
         match c {
-            '"' => {
-                self.cursor = self
-                    .advance_to_char('"')
-                    .map(|offset| self.cursor + offset)
-                    .unwrap_or(self.source_code.len());
-
-                Some(Token::StringLiteral(start_pos, to_u16(self.cursor)))
-            }
+            '"' => match self.advance_to_char('"') {
+                Some(offset) => {
+                    self.cursor += offset;
+                    Some(Ok(Token::StrLit(start_pos, to_u16(self.cursor))))
+                }
+                None => Some(Err(Err::UnterminatedStrLit)),
+            },
             _ => {
                 self.cursor = self
                     .advance_to_whitespace()
                     .map(|offset| self.cursor + offset)
                     .unwrap_or(self.source_code.len());
 
-                Some(Token::Word(start_pos, to_u16(self.cursor)))
+                Some(Ok(Token::Word(start_pos, to_u16(self.cursor))))
             }
         }
     }
@@ -90,41 +90,33 @@ mod tests {
     #[test]
     fn split_basic() {
         let sc = "hello world";
-        let mut ts = tokenize(sc);
+        let ts: Result<Box<[Token]>, Err> = tokenize(sc).collect();
+        let ts = ts.expect("no parse errors");
+        assert_eq!(ts.as_ref(), &[Token::Word(0, 5), Token::Word(6, 11)]);
 
-        let t = ts.next();
-        assert_eq!(t, Some(Token::Word(0, 5)));
-        assert_eq!(t.unwrap().str(sc), "hello");
-
-        let t = ts.next();
-        assert_eq!(t, Some(Token::Word(6, 11)));
-        assert_eq!(t.unwrap().str(sc), "world");
-
-        let t = ts.next();
-        assert_eq!(t, None);
+        let ids: Box<[&str]> = ts.iter().map(|t| t.str(sc)).collect();
+        assert_eq!(ids.as_ref(), &["hello", "world"]);
     }
 
     #[test]
     fn split_with_quoted_string() {
         let sc = "\"hello\" \"world\" concat";
-        let mut ts = tokenize(sc);
+        let ts: Result<Box<[Token]>, Err> = tokenize(sc).collect();
+        let ts = ts.expect("no parse errors");
+        assert_eq!(
+            ts.as_ref(),
+            &[Token::StrLit(0, 7), Token::StrLit(8, 15), Token::Word(16, 22)]
+        );
 
-        let t = ts.next();
-        assert_eq!(t, Some(Token::StringLiteral(0, 7)));
-        assert_eq!(t.unwrap().str(sc), "hello");
-
-        let t = ts.next();
-        assert_eq!(t, Some(Token::StringLiteral(8, 15)));
-        assert_eq!(t.unwrap().str(sc), "world");
-
-        let t = ts.next();
-        assert_eq!(t, Some(Token::Word(16, 22)));
-        assert_eq!(t.unwrap().str(sc), "concat");
-
-        let t = ts.next();
-        assert_eq!(t, None);
+        let ids: Box<[&str]> = ts.iter().map(|t| t.str(sc)).collect();
+        assert_eq!(ids.as_ref(), &["hello", "world", "concat"]);
     }
 
     #[test]
-    fn unterminated_string_literal() {}
+    fn unterminated_string_literal() {
+        let sc = "\"hwæt";
+        let ts: Result<Box<[Token]>, Err> = tokenize(sc).collect();
+
+        assert_eq!(ts, Err(Err::UnterminatedStrLit));
+    }
 }
