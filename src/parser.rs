@@ -61,18 +61,31 @@ impl<'a> Iterator for Tokenizer<'a> {
         match c {
             '"' => match self.advance_to_char('"') {
                 Some(offset) => {
-                    self.cursor += offset;
-                    Some(Ok(Token::StrLit(start_pos, to_u16(self.cursor))))
+                    let new_offset = self.cursor + offset;
+                    self.cursor = new_offset;
+
+                    let item = Ok(Token::StrLit(start_pos, to_u16(new_offset)));
+
+                    Some(item)
                 }
-                None => Some(Err(Err::UnterminatedStrLit)),
+                None => {
+                    let new_offset = self.cursor;
+                    self.cursor = new_offset;
+                    let item = Err(Err::UnterminatedStrLit);
+                    Some(item)
+                }
             },
             _ => {
-                self.cursor = self
+                let new_offset = self
                     .advance_to_whitespace()
                     .map(|offset| self.cursor + offset)
                     .unwrap_or(self.source_code.len());
 
-                Some(Ok(Token::Word(start_pos, to_u16(self.cursor))))
+                self.cursor = new_offset;
+
+                let item = Ok(Token::Word(start_pos, to_u16(new_offset)));
+
+                Some(item)
             }
         }
     }
