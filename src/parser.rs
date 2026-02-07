@@ -1,9 +1,11 @@
 use std::{error::Error, iter::Iterator};
 
 #[derive(Debug, Eq, PartialEq)]
-enum Token {
+enum Tok {
     Word(u16, u16),
     StrLit(u16, u16),
+    LQuote(u16),
+    RQuote(u16),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -11,14 +13,16 @@ enum Err {
     UnterminatedStrLit,
 }
 
-impl Token {
+impl Tok {
     fn str<'a>(&self, source_code: &'a str) -> &'a str {
         match self {
-            &Token::Word(start, end) => &source_code[start.into()..end.into()],
-            &Token::StrLit(start, end) => {
+            &Tok::Word(start, end) => &source_code[start.into()..end.into()],
+            &Tok::StrLit(start, end) => {
                 let (start, end) = (start + 1, end - 1); // removing quotes
                 &source_code[start.into()..end.into()]
             }
+            &Tok::LQuote(_) => "[",
+            &Tok::RQuote(_) => "]",
         }
     }
 }
@@ -52,42 +56,37 @@ impl<'a> Tokenizer<'a> {
 }
 
 impl<'a> Iterator for Tokenizer<'a> {
-    type Item = Result<Token, Err>;
+    type Item = Result<Tok, Err>;
     fn next(&mut self) -> Option<Self::Item> {
         let (i, c) = self.advance_to_identifier()?;
         self.cursor += i;
         let start_pos = to_u16(self.cursor);
 
-        match c {
-            '"' => match self.advance_to_char('"') {
-                Some(offset) => {
+        let (new_cusor, item) = match c {
+            '"' => self
+                .advance_to_char('"')
+                .map(|offset| {
                     let new_cursor = self.cursor + offset;
-                    self.cursor = new_cursor;
-
-                    let item = Ok(Token::StrLit(start_pos, to_u16(new_cursor)));
-
-                    Some(item)
-                }
-                None => {
-                    let new_cursor = self.cursor;
-                    self.cursor = new_cursor;
-                    let item = Err(Err::UnterminatedStrLit);
-                    Some(item)
-                }
-            },
+                    let t = Tok::StrLit(start_pos, to_u16(new_cursor));
+                    (new_cursor, Ok(t))
+                })
+                .unwrap_or((self.cursor, Err(Err::UnterminatedStrLit))),
+            '[' => (self.cursor + 1, Ok(Tok::LQuote(to_u16(self.cursor)))),
+            ']' => (self.cursor + 1, Ok(Tok::RQuote(to_u16(self.cursor)))),
             _ => {
                 let new_cursor = self
                     .advance_to_whitespace()
                     .map(|offset| self.cursor + offset)
                     .unwrap_or(self.source_code.len());
 
-                self.cursor = new_cursor;
+                let t = Tok::Word(start_pos, to_u16(new_cursor));
 
-                let item = Ok(Token::Word(start_pos, to_u16(new_cursor)));
-
-                Some(item)
+                (new_cursor, Ok(t))
             }
-        }
+        };
+
+        self.cursor = new_cusor;
+        Some(item)
     }
 }
 
@@ -103,9 +102,9 @@ mod tests {
     #[test]
     fn split_basic() {
         let sc = "hello world";
-        let ts: Result<Box<[Token]>, Err> = tokenize(sc).collect();
+        let ts: Result<Box<[Tok]>, Err> = tokenize(sc).collect();
         let ts = ts.expect("no parse errors");
-        assert_eq!(ts.as_ref(), &[Token::Word(0, 5), Token::Word(6, 11)]);
+        assert_eq!(ts.as_ref(), &[Tok::Word(0, 5), Tok::Word(6, 11)]);
 
         let ids: Box<[&str]> = ts.iter().map(|t| t.str(sc)).collect();
         assert_eq!(ids.as_ref(), &["hello", "world"]);
@@ -113,12 +112,12 @@ mod tests {
 
     #[test]
     fn split_with_quoted_string() {
-        let sc = "\"hello\" \"world\" concat";
-        let ts: Result<Box<[Token]>, Err> = tokenize(sc).collect();
+        let sc = r#""hello" "world" concat"#;
+        let ts: Result<Box<[Tok]>, Err> = tokenize(sc).collect();
         let ts = ts.expect("no parse errors");
         assert_eq!(
             ts.as_ref(),
-            &[Token::StrLit(0, 7), Token::StrLit(8, 15), Token::Word(16, 22)]
+            &[Tok::StrLit(0, 7), Tok::StrLit(8, 15), Tok::Word(16, 22)]
         );
 
         let ids: Box<[&str]> = ts.iter().map(|t| t.str(sc)).collect();
@@ -127,9 +126,24 @@ mod tests {
 
     #[test]
     fn unterminated_string_literal() {
-        let sc = "\"hwæt";
-        let ts: Result<Box<[Token]>, Err> = tokenize(sc).collect();
+        let sc = r#""hwæt"#;
+        let ts: Result<Box<[Tok]>, Err> = tokenize(sc).collect();
 
         assert_eq!(ts, Err(Err::UnterminatedStrLit));
+    }
+
+    #[test]
+    fn quotes() {
+        let sc = "[ add1 ]";
+        let ts: Result<Box<[Tok]>, Err> = tokenize(sc).collect();
+        let ts = ts.expect("no parse errors");
+
+        assert_eq!(
+            ts.as_ref(),
+            &[Tok::LQuote(0), Tok::Word(2, 6), Tok::RQuote(7),]
+        );
+
+        let ids: Box<[&str]> = ts.iter().map(|t| t.str(sc)).collect();
+        assert_eq!(ids.as_ref(), &["[", "add1", "]"]);
     }
 }
