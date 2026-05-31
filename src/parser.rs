@@ -2,15 +2,15 @@ use std::{error::Error, iter::Iterator};
 
 #[derive(Debug, Eq, PartialEq)]
 enum Tok {
-    Word(u16, u16),
-    StrLit(u16, u16),
-    LQuote(u16),
-    RQuote(u16),
+    Word(usize, usize),
+    StrLit(usize, usize),
+    LQuote(usize),
+    RQuote(usize),
 }
 
 #[derive(Debug, Eq, PartialEq)]
 enum Err {
-    UnterminatedStrLit,
+    UnterminatedStrLit(usize),
 }
 
 impl Tok {
@@ -30,10 +30,6 @@ impl Tok {
 struct Tokenizer<'a> {
     source_code: &'a str,
     cursor: usize,
-}
-
-fn to_u16(i: usize) -> u16 {
-    i.try_into().expect("source code is very long")
 }
 
 impl<'a> Tokenizer<'a> {
@@ -60,26 +56,29 @@ impl<'a> Iterator for Tokenizer<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let (i, c) = self.advance_to_identifier()?;
         self.cursor += i;
-        let start_pos = to_u16(self.cursor);
+        let start_pos = self.cursor;
 
         let (new_cusor, item) = match c {
             '"' => self
                 .advance_to_char('"')
                 .map(|offset| {
                     let new_cursor = self.cursor + offset;
-                    let t = Tok::StrLit(start_pos, to_u16(new_cursor));
+                    let t = Tok::StrLit(start_pos, new_cursor);
                     (new_cursor, Ok(t))
                 })
-                .unwrap_or((self.cursor, Err(Err::UnterminatedStrLit))),
-            '[' => (self.cursor + 1, Ok(Tok::LQuote(to_u16(self.cursor)))),
-            ']' => (self.cursor + 1, Ok(Tok::RQuote(to_u16(self.cursor)))),
+                .unwrap_or((
+                    self.cursor,
+                    Err(Err::UnterminatedStrLit(start_pos)),
+                )),
+            '[' => (self.cursor + 1, Ok(Tok::LQuote(self.cursor))),
+            ']' => (self.cursor + 1, Ok(Tok::RQuote(self.cursor))),
             _ => {
                 let new_cursor = self
                     .advance_to_whitespace()
                     .map(|offset| self.cursor + offset)
                     .unwrap_or(self.source_code.len());
 
-                let t = Tok::Word(start_pos, to_u16(new_cursor));
+                let t = Tok::Word(start_pos, new_cursor);
 
                 (new_cursor, Ok(t))
             }
@@ -129,7 +128,15 @@ mod tests {
         let sc = r#""hwæt"#;
         let ts: Result<Box<[Tok]>, Err> = tokenize(sc).collect();
 
-        assert_eq!(ts, Err(Err::UnterminatedStrLit));
+        assert_eq!(ts, Err(Err::UnterminatedStrLit(0)));
+    }
+
+    #[test]
+    fn unterminated_string_literal2() {
+        let sc = r#""hello" "wo"#;
+        let ts: Result<Box<[Tok]>, Err> = tokenize(sc).collect();
+
+        assert_eq!(ts, Err(Err::UnterminatedStrLit(8)));
     }
 
     #[test]

@@ -11,3 +11,5 @@ pub const MUL: IR = 0xffffffffffffff_fb;
 pub const DIV: IR = 0xffffffffffffff_fa;
 pub const RET: IR = 0xffffffffffffff_f9;
 pub const HALT: IR = 0xffffffffffffff_f8;
+
+struct Generator {}
